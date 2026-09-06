@@ -1,0 +1,51 @@
+# Break Signal — configuration
+# Copy to config.yaml and fill in the secrets. config.yaml is gitignored.
+
+exchange: okx                 # only "okx" implemented (Phase 2)
+
+# One watcher is started per (symbol, timeframe) pair.
+watches:
+  - symbol: SOL-USDT-SWAP     # OKX instId (perpetual)
+    timeframe: "1D"           # OKX bar: 1D, 4H, 1H, 12H, ...
+  - symbol: SOL-USDT-SWAP
+    timeframe: "4H"
+
+# ── Algorithm parameters (STRICT defaults, must mirror pine/break_signal.pine) ──
+params:
+  pivot_len_auto: true        # true -> 5 on >=1D, 8 on >=4H, else 10
+  pivot_len: 5                # used only when pivot_len_auto is false
+  max_pivots: 10              # pivots kept per side
+  max_age: 400                # forget pivots older than N bars
+  look_max: 300               # validation window (bars)
+  min_bars: 10                # min bars between two anchors
+  min_touches: 3              # anchors + at least one more
+  max_violations: 0           # closes allowed through a line (0 = strict)
+  atr_valid: 0.10             # validity tolerance (xATR)
+  atr_touch: 0.25             # touch tolerance (xATR)
+  max_dist: 12.0              # ignore lines further than N xATR from price
+  max_lines: 3                # kept per side
+  atr_break: 0.30             # break buffer (xATR)
+  use_volume: true            # require volume expansion
+  vol_mult: 1.5               # volume vs SMA20 multiple
+  use_body: true              # require a decisive candle body
+  body_min: 0.5               # min body / range
+  two_bar: false              # require 2 consecutive closes beyond the line
+
+backfill: 500                 # candles fetched on startup
+
+# ── Notifications. Failures are isolated: Discord down never blocks Telegram. ──
+channels:
+  telegram:
+    enabled: true
+    bot_token: ""             # from @BotFather
+    chat_id: ""               # your chat/channel id
+  discord:
+    enabled: true
+    webhook_url: ""           # channel -> Integrations -> Webhooks
+
+render_chart: true            # attach a chart PNG to each alert
+chart_bars: 120               # candles shown in the snapshot
+
+state_db: data/state.db       # SQLite path; the ./data dir is the mounted Docker volume
+                              # (on a Pi, back ./data with an SSD/USB, not the SD card)
+log_level: INFO

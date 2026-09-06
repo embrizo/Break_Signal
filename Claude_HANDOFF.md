@@ -27,11 +27,36 @@ Three phases: Pine Script indicator on TradingView (Phase 1, done) → Python wa
 - `IMPLEMENTATION_PLAN.md` — full spec: algorithm (§2), Pine details (§3), Python service design (§4), milestones (§6), risks (§7), locked decisions (§8)
 - `pine/break_signal.pine` — Pine v6 indicator, complete and ready to load
 
+**What's built (Phase 2 — added session 2):**
+- Full Python service under `src/break_signal/`:
+  - `core/` — `indicators.py` (Pine-matching RMA/ATR/RSI), `pivots.py`, `trendline.py`, `breakout.py`, `engine.py`, `state.py` (SQLite/WAL), `params.py`, `types.py`
+  - `data/` — `okx_rest.py` (paged backfill), `okx_ws.py` (live stream, heartbeat, reconnect)
+  - `notify/` — `base.py` + `telegram.py` + `discord.py` (independent failures)
+  - `render/chart.py` — mplfinance snapshot with lines drawn
+  - `backtest/replay.py` — growing-window replay → CSV
+  - `watcher.py`, `__main__.py`
+- `config.example.yaml`, `pyproject.toml`, `requirements.txt`, `Dockerfile` (arm64 + piwheels), `docker-compose.yml`
+- `tests/` — 20 tests, ALL PASSING (indicators, pivots, trendline, breakout)
+- README rewritten with full usage
+
+**Key implementation decision (session 2):** the Python validity walk in
+`trendline._build_side` runs through `last_bar - 1`, NOT `last_bar` like the literal
+Pine loop. Reason: the Python engine rebuilds lines every bar in a single pass, so
+including the current bar would let a breaking close invalidate the line before the
+break block could see it. Walking to `last_bar-1` reproduces Pine's *effective*
+behaviour, where lines persist between rebuilds and the current close is tested as a
+break against them. Documented inline. **If Pine and Python signals ever disagree on
+a break bar, this is the first place to look.**
+
+**Line id** is keyed on pivot open-time (ms), `f"{side}:{ts_a}:{ts_b}"`, not bar
+index — stable across restarts (Pine uses bar_index; intentional divergence).
+
 **What's not built yet:**
-- Python service (`src/break_signal/`) — Phase 2
-- `config.yaml` template (`config.example.yaml`) — needed before Phase 2
-- Docker setup — `Dockerfile` + `docker-compose.yml` for Pi 5
-- Tests — parity tests against Pine output on same OKX candles
+- Live smoke test against real OKX (never run — needs network + real candles)
+- `config.yaml` with real Telegram/Discord secrets (user must create)
+- Deploy to the actual Pi 5
+- M3 tuning still pending user's visual check of the Pine lines
+- M6 backtest report (the `replay.py` tool exists; the *report* hasn't been produced)
 
 **Milestone status:**
 
@@ -39,11 +64,11 @@ Three phases: Pine Script indicator on TradingView (Phase 1, done) → Python wa
 |---|---|---|
 | M1 | Pine indicator draws lines | Done |
 | M2 | Pine break alert fires (user verifies on TradingView) | Waiting — user needs to load it |
-| M3 | Rules tuned (≤1 false signal per 20 bars over 3 months SOL) | Blocked on M2 |
-| M4 | Python core + tests reproduce Pine lines | Not started |
-| M5 | Telegram alerts live from Pi 5 | Not started |
-| M6 | Backtest report (12 months, hit-rate summary) | Not started |
-| M7 | Multi-symbol + 24/7 Docker deploy on Pi 5 | Not started |
+| M3 | Rules tuned (≤1 false signal per 20 bars over 3 months SOL) | Blocked on M2/user |
+| M4 | Python core + tests reproduce Pine lines | Done — 20 tests pass on synthetic data |
+| M5 | Telegram+Discord alerts live from Pi 5 | Code done; not yet run against live OKX / deployed |
+| M6 | Backtest report | Tool built (`replay.py`); report not produced |
+| M7 | Multi-symbol + 24/7 Docker deploy on Pi 5 | Docker built; not deployed |
 
 ## Algorithm summary
 
@@ -78,12 +103,32 @@ Documented in detail in `IMPLEMENTATION_PLAN.md` §2. The short version:
 
 ## Next steps
 
-1. **User action: load Pine indicator on TradingView** — paste `pine/break_signal.pine` into Pine Editor on `OKX:SOLUSDT.P` 1D. Check if auto-drawn lines match the hand-drawn ones from the reference screenshot. Report back what needs tuning (M2/M3).
-2. **Build Python core** — `src/break_signal/core/` with `pivots.py`, `trendline.py`, `breakout.py`. Port the exact algorithm from Pine. Write parity tests against known OKX candle fixtures (M4).
-3. **OKX data module** — `data/okx_rest.py` (backfill) + `data/okx_ws.py` (live stream). Async, no keys (M4).
-4. **Notification module** — `notify/telegram.py` + `notify/discord.py` behind a common `Notifier` protocol. `config.example.yaml` as a template (M5).
-5. **Chart rendering** — `render/chart.py` using mplfinance, attach PNG to alerts (M5).
-6. **Docker + Pi 5 deploy** — `Dockerfile` (ARM64 `python:3.11-slim-bookworm`), `docker-compose.yml`, WAL-mode SQLite (M7).
+1. **Live smoke test** — on a machine with network + full deps
+   (`pip install -r requirements.txt`), run
+   `python -m break_signal.backtest.replay --symbol SOL-USDT-SWAP --tf 1D --limit 500 --out signals.csv`
+   to confirm the OKX REST fetch works and see real signals. This is the fastest
+   real-data check and needs no secrets.
+2. **User action: load Pine indicator on TradingView** — verify the auto lines match
+   the reference screenshot; tune `pivotLen`/`atrBreak` (M2/M3). Whatever tuning wins
+   must be copied into `config.example.yaml` `params:` so Python stays in parity.
+3. **Create `config.yaml`** from the example with real Telegram bot token + chat_id and
+   Discord webhook. Run `python -m break_signal -c config.yaml` and wait for a live break.
+4. **Deploy to the Pi 5** — `docker compose up -d --build`. Point `./data` at an SSD/USB.
+5. **M6 backtest report** — extend `replay.py` output into a hit-rate summary over ~12
+   months across SOL + BTC + ETH to validate the strict defaults don't overfit SOL.
+6. **Optional Phase 3** — FastAPI + TradingView Lightweight Charts dashboard.
+
+## Environment notes (session 2)
+
+- Dev machine has multiple Python installs; the active one is a hermes-agent venv
+  (`C:\Users\embri\AppData\Local\hermes\hermes-agent\venv`). Only `numpy` + `pytest`
+  were installed there for the core tests. `aiohttp`, `websockets`, `pandas`,
+  `mplfinance`, `matplotlib` are NOT installed locally — the service's data/render/
+  notify layers have been compile-checked but not run here. Run them on the Pi or a
+  full venv.
+- Core tests pass with just numpy + pytest: `python -m pytest tests/ -q` (but the
+  `render`/`data`/`notify` modules import heavy deps, so run only the core test files
+  if those aren't installed, or install the full requirements first).
 
 ## How to resume work in a new session
 

@@ -1,0 +1,21 @@
+services:
+  break-signal:
+    build: .
+    image: break-signal:latest
+    container_name: break-signal
+    restart: unless-stopped
+    volumes:
+      # Secrets stay on the host, never in the image.
+      - ./config.yaml:/app/config.yaml:ro
+      # Persist SQLite state across restarts. On a Pi, point ./data at an
+      # SSD/USB mount rather than the SD card to avoid flash wear.
+      - ./data:/app/data
+    environment:
+      # Keep the state db on the mounted volume.
+      - BREAK_SIGNAL_CONFIG=/app/config.yaml
+    # No ports exposed — this is an outbound-only worker.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
