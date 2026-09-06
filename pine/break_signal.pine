@@ -1,0 +1,335 @@
+//@version=6
+// ═══════════════════════════════════════════════════════════════════════════
+//  BREAK SIGNAL — Auto Trendlines & Breakout Alerts
+//  Target : OKX:SOLUSDT.P  (perpetual futures) on 1D and 4H
+//  Mode   : STRICT / high-quality — few signals, high conviction
+//
+//  What it does
+//    1. Finds fractal pivot highs/lows.
+//    2. Connects every valid pivot pair into candidate trendlines.
+//    3. Throws away any line that price has already CLOSED through.
+//    4. Scores survivors by touches / length / recency, keeps the best 3 per side.
+//    5. Fires alert() on a confirmed close beyond a line (+ volume + body filter).
+//
+//  Alert setup
+//    Right-click chart -> Add alert -> Condition: "Break Signal"
+//    -> "Any alert() function call" -> Frequency: "Once Per Bar Close"
+//    -> Notifications: App push (free plan) or Webhook URL (Pro+, points at the Pi 5 relay)
+//
+//  The alert message is JSON — the Pi 5 relay parses it and fans out to
+//  Telegram + Discord. Same field names as the Phase-2 Python service.
+//
+//  If TradingView reports "loop takes too long": lower `Pivots kept per side`
+//  to 8, or `Validation window` to 200.
+// ═══════════════════════════════════════════════════════════════════════════
+
+indicator("Break Signal — Auto Trendlines", shorttitle = "BreakSignal",
+     overlay = true, max_lines_count = 500, max_labels_count = 500, max_bars_back = 500)
+
+// ───────────────────────────────────────────────────────────────────────────
+//  TYPE
+// ───────────────────────────────────────────────────────────────────────────
+type TL
+    string side        // "R" = resistance (from pivot highs), "S" = support
+    int    ax          // anchor A bar_index (older)
+    float  ay          // anchor A price
+    int    bx          // anchor B bar_index (newer)
+    float  by          // anchor B price
+    float  slope       // price per bar
+    int    touches
+    float  score
+
+// ───────────────────────────────────────────────────────────────────────────
+//  INPUTS
+// ───────────────────────────────────────────────────────────────────────────
+gD = "Detection"
+autoTune    = input.bool (true, "Auto-tune pivot length by timeframe",  group = gD,
+     tooltip = "1D -> 5, 4H -> 8, lower -> 10. Uncheck to set it manually.")
+pivotManual = input.int  (5,    "Pivot lookback (manual)",  minval = 2, maxval = 30, group = gD)
+maxPivots   = input.int  (10,   "Pivots kept per side",     minval = 4, maxval = 20, group = gD,
+     tooltip = "Higher = more candidate lines but slower. 10 is the sweet spot.")
+maxAge      = input.int  (400,  "Forget pivots older than (bars)", minval = 100, group = gD)
+lookMax     = input.int  (300,  "Validation window (bars)", minval = 100, group = gD)
+minBars     = input.int  (10,   "Min bars between anchors", minval = 3,   group = gD)
+
+gQ = "Quality filters  (STRICT defaults)"
+minTouches  = input.int  (3,    "Min touches",              minval = 2, maxval = 8, group = gQ,
+     tooltip = "The 2 anchors count as touches. 3 = anchors + one confirmation.")
+maxViol     = input.int  (0,    "Allowed closes through line", minval = 0, maxval = 2, group = gQ,
+     tooltip = "0 = strict. A single close through kills the line.")
+atrValid    = input.float(0.10, "Validity tolerance (xATR)", minval = 0.0, step = 0.05, group = gQ)
+atrTouch    = input.float(0.25, "Touch tolerance (xATR)",    minval = 0.05, step = 0.05, group = gQ)
+maxDist     = input.float(12.0, "Ignore lines further than (xATR)", minval = 2.0, step = 1.0, group = gQ)
+maxLines    = input.int  (3,    "Lines drawn per side",      minval = 1, maxval = 6, group = gQ)
+
+gB = "Break confirmation"
+atrBreak    = input.float(0.30, "Break buffer (xATR)",  minval = 0.0, step = 0.05, group = gB,
+     tooltip = "Close must clear the line by this much. Raise to cut wick noise.")
+useVol      = input.bool (true, "Require volume expansion",  group = gB)
+volMult     = input.float(1.5,  "Volume vs SMA20 multiple",  minval = 1.0, step = 0.1, group = gB)
+useBody     = input.bool (true, "Require a decisive body",    group = gB)
+bodyMin     = input.float(0.5,  "Min body / range",     minval = 0.1, maxval = 1.0, step = 0.05, group = gB)
+twoBar      = input.bool (false,"Require 2 consecutive closes beyond line", group = gB,
+     tooltip = "Strictest setting. Costs you one full bar of delay.")
+
+gV = "Visuals"
+showTable   = input.bool (true, "Show info table",  group = gV)
+showGhost   = input.bool (true, "Keep broken lines on chart", group = gV)
+colRes      = input.color(color.new(#f23645, 0), "Resistance", group = gV, inline = "c")
+colSup      = input.color(color.new(#089981, 0), "Support",    group = gV, inline = "c")
+colGhost    = input.color(color.new(#787b86, 55), "Broken",    group = gV, inline = "c")
+
+// ───────────────────────────────────────────────────────────────────────────
+//  CONTEXT
+// ───────────────────────────────────────────────────────────────────────────
+tfSec    = timeframe.in_seconds(timeframe.period)
+pivotLen = autoTune ? (tfSec >= 86400 ? 5 : tfSec >= 14400 ? 8 : 10) : pivotManual
+
+atr    = ta.atr(14)
+volSma = ta.sma(volume, 20)
+rsi    = ta.rsi(close, 14)
+
+// ───────────────────────────────────────────────────────────────────────────
+//  STATE
+// ───────────────────────────────────────────────────────────────────────────
+var array<int>    phX = array.new<int>()
+var array<float>  phY = array.new<float>()
+var array<int>    plX = array.new<int>()
+var array<float>  plY = array.new<float>()
+
+var array<TL>     active   = array.new<TL>()     // lines currently being watched
+var array<line>   drawn    = array.new<line>()   // drawing handles, parallel to `active`
+var array<line>   ghosts   = array.new<line>()   // frozen drawings of broken lines
+var array<string> brokenId = array.new<string>() // ids that already fired, never re-arm
+
+idOf(TL t) => t.side + ":" + str.tostring(t.ax) + ":" + str.tostring(t.bx)
+valAt(TL t, int x) => t.ay + t.slope * (x - t.ax)
+
+// ───────────────────────────────────────────────────────────────────────────
+//  1. PIVOTS
+// ───────────────────────────────────────────────────────────────────────────
+ph = ta.pivothigh(pivotLen, pivotLen)
+pl = ta.pivotlow (pivotLen, pivotLen)
+
+if not na(ph)
+    array.push(phX, bar_index - pivotLen)
+    array.push(phY, ph)
+if not na(pl)
+    array.push(plX, bar_index - pivotLen)
+    array.push(plY, pl)
+
+// trim by count and by age — this is what bounds every loop below
+trim(array<int> ax, array<float> ay) =>
+    while array.size(ax) > maxPivots
+        array.shift(ax)
+        array.shift(ay)
+    while array.size(ax) > 0 and (bar_index - array.get(ax, 0)) > maxAge
+        array.shift(ax)
+        array.shift(ay)
+
+trim(phX, phY)
+trim(plX, plY)
+
+// ───────────────────────────────────────────────────────────────────────────
+//  2-4. CANDIDATES -> VALIDATE -> SCORE
+// ───────────────────────────────────────────────────────────────────────────
+buildSide(array<int> px, array<float> py, string side) =>
+    out = array.new<TL>()
+    n   = array.size(px)
+    if n >= 2 and not na(atr) and atr > 0
+        for i = 0 to n - 2
+            ax = array.get(px, i)
+            ay = array.get(py, i)
+            for j = i + 1 to n - 1
+                bx = array.get(px, j)
+                by = array.get(py, j)
+                if bx - ax >= minBars
+                    slope = (by - ay) / (bx - ax)
+                    lvNow = ay + slope * (bar_index - ax)
+                    // prune: line must live somewhere near current price
+                    if math.abs(lvNow - close) <= maxDist * atr
+                        viol      = 0
+                        touches   = 0
+                        lastTouch = -9999
+                        kFrom     = math.max(ax, bar_index - lookMax)
+                        for k = kFrom to bar_index
+                            off = bar_index - k
+                            lv  = ay + slope * (k - ax)
+                            c   = close[off]
+                            ext = side == "R" ? high[off] : low[off]
+                            // violation: a CLOSE through the line, not a wick
+                            if side == "R"
+                                if c > lv + atrValid * atr
+                                    viol += 1
+                            else
+                                if c < lv - atrValid * atr
+                                    viol += 1
+                            if viol > maxViol
+                                break
+                            // touch: extreme kisses the line, counted once per cluster
+                            if math.abs(ext - lv) <= atrTouch * atr and (k - lastTouch) >= pivotLen
+                                touches   += 1
+                                lastTouch := k
+                        if viol <= maxViol and touches >= minTouches
+                            span    = math.min((bar_index - ax) / 200.0, 1.0)
+                            recency = 1.0 / (1.0 + (bar_index - bx))
+                            sc      = 3.0 * touches + 2.0 * span + 1.5 * recency
+                            array.push(out, TL.new(side, ax, ay, bx, by, slope, touches, sc))
+    out
+
+// two lines are "the same line" if they sit on top of each other now and 50 bars ago
+isDup(TL a, TL b) =>
+    dNow = math.abs(valAt(a, bar_index)      - valAt(b, bar_index))
+    dOld = math.abs(valAt(a, bar_index - 50) - valAt(b, bar_index - 50))
+    dNow <= 0.5 * atr and dOld <= 1.0 * atr
+
+selectTop(array<TL> cands) =>
+    sel = array.new<TL>()
+    tmp = array.copy(cands)
+    while array.size(sel) < maxLines and array.size(tmp) > 0
+        bi = 0
+        bs = -1e12
+        for i = 0 to array.size(tmp) - 1
+            t = array.get(tmp, i)
+            if t.score > bs
+                bs := t.score
+                bi := i
+        best = array.remove(tmp, bi)
+        dup  = false
+        if array.size(sel) > 0
+            for i = 0 to array.size(sel) - 1
+                if isDup(best, array.get(sel, i))
+                    dup := true
+                    break
+        // never re-arm a line that already fired
+        if not dup and array.indexof(brokenId, idOf(best)) == -1
+            array.push(sel, best)
+    sel
+
+// ───────────────────────────────────────────────────────────────────────────
+//  REBUILD — only when a new pivot confirms (roughly every `pivotLen` bars)
+// ───────────────────────────────────────────────────────────────────────────
+rebuild = (not na(ph) or not na(pl)) and not na(atr) and atr > 0
+
+if rebuild
+    if array.size(drawn) > 0
+        for i = 0 to array.size(drawn) - 1
+            line.delete(array.get(drawn, i))
+    array.clear(drawn)
+    array.clear(active)
+
+    resSel = selectTop(buildSide(phX, phY, "R"))
+    supSel = selectTop(buildSide(plX, plY, "S"))
+
+    if array.size(resSel) > 0
+        for i = 0 to array.size(resSel) - 1
+            array.push(active, array.get(resSel, i))
+    if array.size(supSel) > 0
+        for i = 0 to array.size(supSel) - 1
+            array.push(active, array.get(supSel, i))
+
+    if array.size(active) > 0
+        for i = 0 to array.size(active) - 1
+            t = array.get(active, i)
+            array.push(drawn, line.new(t.ax, t.ay, t.bx, t.by, xloc = xloc.bar_index,
+                 extend = extend.right, color = t.side == "R" ? colRes : colSup,
+                 width = 2, style = line.style_solid))
+
+// ───────────────────────────────────────────────────────────────────────────
+//  5. BREAK DETECTION — confirmed closes only
+// ───────────────────────────────────────────────────────────────────────────
+volOk  = not useVol  or (not na(volSma) and volume > volSma * volMult)
+bodyOk = not useBody or (high - low > 0 and math.abs(close - open) >= (high - low) * bodyMin)
+
+brokeUp = false
+brokeDn = false
+alertMsg = ""
+
+if barstate.isconfirmed and array.size(active) > 0 and not na(atr)
+    buf = atrBreak * atr
+    // walk backwards so removal is safe
+    for i = array.size(active) - 1 to 0
+        t    = array.get(active, i)
+        lv   = valAt(t, bar_index)
+        lvP  = valAt(t, bar_index - 1)
+        age  = bar_index - t.ax
+        up   = close     > lv  + buf
+        upP  = close[1]  > lvP + buf
+        dn   = close     < lv  - buf
+        dnP  = close[1]  < lvP - buf
+        hitR = t.side == "R" and up and (not twoBar or upP)
+        hitS = t.side == "S" and dn and (not twoBar or dnP)
+
+        if (hitR or hitS) and volOk and bodyOk and age >= minBars
+            dist = math.abs(close - lv) / atr
+            evt  = hitR ? "break_up" : "break_down"
+            if hitR
+                brokeUp := true
+            else
+                brokeDn := true
+
+            alertMsg := alertMsg + (alertMsg == "" ? "" : "\n") +
+                 '{"symbol":"'   + syminfo.ticker +
+                 '","exchange":"' + syminfo.prefix +
+                 '","tf":"'      + timeframe.period +
+                 '","event":"'   + evt +
+                 '","side":"'    + (t.side == "R" ? "resistance" : "support") +
+                 '","price":'    + str.tostring(close, format.mintick) +
+                 ',"line":'      + str.tostring(lv, format.mintick) +
+                 ',"atr_dist":'  + str.tostring(dist, "#.##") +
+                 ',"touches":'   + str.tostring(t.touches) +
+                 ',"age_bars":'  + str.tostring(age) +
+                 ',"vol_ratio":' + str.tostring(na(volSma) or volSma == 0 ? 0 : volume / volSma, "#.##") +
+                 ',"rsi":'       + str.tostring(rsi, "#.#") +
+                 ',"time":"'     + str.format_time(time_close, "yyyy-MM-dd'T'HH:mm:ss", "UTC") + 'Z"}'
+
+            label.new(bar_index, hitR ? low : high,
+                 text  = (hitR ? "▲ " : "▼ ") + str.tostring(t.touches) + "T",
+                 style = hitR ? label.style_label_up : label.style_label_down,
+                 color = hitR ? colSup : colRes, textcolor = color.white, size = size.tiny)
+
+            // freeze the drawing, retire the line permanently
+            if showGhost
+                g = line.new(t.ax, t.ay, bar_index, lv, xloc = xloc.bar_index,
+                     extend = extend.none, color = colGhost, width = 1, style = line.style_dashed)
+                array.push(ghosts, g)
+                while array.size(ghosts) > 20
+                    line.delete(array.shift(ghosts))
+
+            array.push(brokenId, idOf(t))
+            while array.size(brokenId) > 200
+                array.shift(brokenId)
+
+            line.delete(array.get(drawn, i))
+            array.remove(drawn, i)
+            array.remove(active, i)
+
+if alertMsg != ""
+    alert(alertMsg, alert.freq_once_per_bar_close)
+
+plotshape(brokeUp, title = "Break Up",   style = shape.triangleup,
+     location = location.belowbar, color = colSup, size = size.small)
+plotshape(brokeDn, title = "Break Down", style = shape.triangledown,
+     location = location.abovebar, color = colRes, size = size.small)
+
+// ───────────────────────────────────────────────────────────────────────────
+//  INFO TABLE — for tuning (M3)
+// ───────────────────────────────────────────────────────────────────────────
+var table tbl = table.new(position.top_right, 4, 8, border_width = 1)
+
+if showTable and barstate.islast
+    table.clear(tbl, 0, 0, 3, 7)
+    table.cell(tbl, 0, 0, "Side",    text_color = color.gray, text_size = size.tiny)
+    table.cell(tbl, 1, 0, "Level",   text_color = color.gray, text_size = size.tiny)
+    table.cell(tbl, 2, 0, "Touch",   text_color = color.gray, text_size = size.tiny)
+    table.cell(tbl, 3, 0, "xATR",    text_color = color.gray, text_size = size.tiny)
+    n = math.min(array.size(active), 7)
+    if n > 0
+        for i = 0 to n - 1
+            t  = array.get(active, i)
+            lv = valAt(t, bar_index)
+            c  = t.side == "R" ? colRes : colSup
+            table.cell(tbl, 0, i + 1, t.side == "R" ? "RES" : "SUP", text_color = c, text_size = size.tiny)
+            table.cell(tbl, 1, i + 1, str.tostring(lv, format.mintick), text_color = c, text_size = size.tiny)
+            table.cell(tbl, 2, i + 1, str.tostring(t.touches), text_color = c, text_size = size.tiny)
+            table.cell(tbl, 3, i + 1, str.tostring((close - lv) / atr, "#.#"), text_color = c, text_size = size.tiny)
