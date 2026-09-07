@@ -18,8 +18,8 @@ build/
 .venv/
 venv/
 
-# Docker volumes
-data/
+# Docker volumes (root-level state dir only — must NOT match src/break_signal/data/)
+/data/
 
 # OS
 Thumbs.db
