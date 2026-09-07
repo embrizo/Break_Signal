@@ -153,7 +153,7 @@ trim(phXf, phYf)
 trim(plXf, plYf)
 
 // merge two sorted-by-bar pivot arrays -> one set, deduped, capped at maxPivots newest
-mergeP(array<int> ax, array<float> ay, array<int> bx, array<float> by) =>
+mergeP(array<int> ax, array<float> ay, array<int> bx, array<float> byArr) =>
     ox = array.copy(ax)
     oy = array.copy(ay)
     if array.size(bx) > 0
@@ -161,7 +161,7 @@ mergeP(array<int> ax, array<float> ay, array<int> bx, array<float> by) =>
             bb = array.get(bx, i)
             if array.indexof(ox, bb) == -1
                 array.push(ox, bb)
-                array.push(oy, array.get(by, i))
+                array.push(oy, array.get(byArr, i))
     while array.size(ox) > maxPivots            // drop the oldest (smallest bar) first
         mi = 0
         mv = array.get(ox, 0)
