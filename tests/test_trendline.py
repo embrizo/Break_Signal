@@ -5,7 +5,9 @@ from break_signal.core.engine import Engine
 from break_signal.core.params import Params
 from break_signal.core.pivots import pivot_highs
 
-from .helpers import descending_resistance
+from break_signal.core.pivots import merge_pivots
+
+from .helpers import descending_resistance, stepped_descending_resistance
 
 
 def _engine(params=None):
@@ -53,3 +55,27 @@ def test_line_id_is_timestamp_stable():
     # id keyed on open-time ms, not bar index -> stable across a re-slice/restart
     assert line.id.startswith("R:")
     assert str(int(c.ts[line.ax])) in line.id
+
+
+# ── multi-scale pivots (finer trendline detection) ──────────────────────────
+
+def test_merge_pivots_dedupes_sorts_and_caps():
+    assert merge_pivots([5, 20], [3, 20, 8], max_pivots=10) == [3, 5, 8, 20]
+    # cap keeps the newest (largest-bar) pivots
+    assert merge_pivots([1, 2, 3], [4, 5, 6], max_pivots=4) == [3, 4, 5, 6]
+
+
+def test_stepped_consolidation_needs_fine_pivots():
+    c = stepped_descending_resistance()
+
+    # Coarse only: the minor highs aren't 5-bar fractal pivots, so the line the
+    # eye would draw is never anchored -> no resistance line.
+    off = _engine(Params(use_fine_pivots=False)).evaluate(c)
+    assert [t for t in off.lines if t.side == "R"] == []
+
+    # Fine pivots on (default): the same line is recovered with >= 3 touches.
+    on = _engine().evaluate(c)
+    r_lines = [t for t in on.lines if t.side == "R"]
+    assert len(r_lines) >= 1
+    assert max(t.touches for t in r_lines) >= 3
+    assert any(abs(t.slope - (-0.2)) < 1e-6 for t in r_lines)

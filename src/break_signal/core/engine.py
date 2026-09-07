@@ -13,7 +13,7 @@ import numpy as np
 from . import indicators
 from .breakout import check_breaks
 from .params import Params
-from .pivots import pivot_highs, pivot_lows
+from .pivots import merge_pivots, pivot_highs, pivot_lows
 from .trendline import build_lines
 from .types import Candles, Signal, Trendline
 
@@ -33,15 +33,24 @@ class Engine:
         self.exchange = exchange
         self.tf_label = tf_label
         self.pivot_len = params.resolved_pivot_len(tf_seconds)
+        # Finer second scale (fixed lookback) for multi-scale detection; the gap
+        # used to cluster touches shrinks to match so close touches still count.
+        self.pivot_fine = params.pivot_len_fine
+        self.touch_gap = self.pivot_fine if params.use_fine_pivots else self.pivot_len
 
-    def _confirmed_pivots(self, idxs: list[int], last_bar: int) -> list[int]:
-        """Keep only confirmed pivots, then trim by age and to max_pivots (newest)."""
-        L = self.pivot_len
-        p = [i for i in idxs if i <= last_bar - L]
-        p = [i for i in p if (last_bar - i) <= self.params.max_age]
-        if len(p) > self.params.max_pivots:
-            p = p[-self.params.max_pivots :]
-        return p
+    def _confirmed(self, idxs: list[int], last_bar: int, L: int) -> list[int]:
+        """Keep pivots whose right window exists (confirmed) and that aren't too old."""
+        return [i for i in idxs if i <= last_bar - L and (last_bar - i) <= self.params.max_age]
+
+    def _pivot_bars(self, values, last_bar: int, finder) -> list[int]:
+        """Confirmed pivots at the coarse scale, merged with the fine scale when on."""
+        coarse = self._confirmed(finder(values, self.pivot_len), last_bar, self.pivot_len)
+        if not self.params.use_fine_pivots:
+            if len(coarse) > self.params.max_pivots:
+                coarse = coarse[-self.params.max_pivots :]
+            return coarse
+        fine = self._confirmed(finder(values, self.pivot_fine), last_bar, self.pivot_fine)
+        return merge_pivots(coarse, fine, self.params.max_pivots)
 
     def evaluate(self, candles: Candles, broken_ids: set[str] | None = None) -> EngineResult:
         """Compute lines + signals at the last bar of ``candles``."""
@@ -53,11 +62,11 @@ class Engine:
         rsi = indicators.rsi(candles.close, 14)
         atr_last = float(atr[last_bar]) if np.isfinite(atr[last_bar]) else float("nan")
 
-        ph = self._confirmed_pivots(pivot_highs(candles.high, self.pivot_len), last_bar)
-        pl = self._confirmed_pivots(pivot_lows(candles.low, self.pivot_len), last_bar)
+        ph = self._pivot_bars(candles.high, last_bar, pivot_highs)
+        pl = self._pivot_bars(candles.low, last_bar, pivot_lows)
 
         lines = build_lines(
-            candles, atr_last, ph, pl, self.params, last_bar, self.pivot_len, broken_ids
+            candles, atr_last, ph, pl, self.params, last_bar, self.touch_gap, broken_ids
         )
         signals = check_breaks(
             candles,

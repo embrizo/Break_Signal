@@ -8,6 +8,8 @@ from dataclasses import dataclass
 class Params:
     pivot_len_auto: bool = True
     pivot_len: int = 5
+    use_fine_pivots: bool = True
+    pivot_len_fine: int = 3
     max_pivots: int = 10
     max_age: int = 400
     look_max: int = 300

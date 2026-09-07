@@ -57,6 +57,12 @@ Two implementations of one algorithm, kept in parity:
   trendlines. Complete; not yet visually verified on TradingView by the user.
 
 - **Phase 2 — Python service** (`src/break_signal/`):
+  - **Multi-scale pivots (Session 4, IMPLEMENTATION_PLAN.md §11):** detection
+    merges a coarse and a fine (`pivot_len_fine=3`) fractal scale so consolidation
+    trendlines across minor swings are caught, not just strong pivots. Toggle
+    `use_fine_pivots` (default ON). Mirrored in Pine (`useFine`/`pivotFine`/`mergeP`)
+    and Python (`pivots.merge_pivots`, `engine._pivot_bars`). Verified live: fine
+    OFF = 12 signals (unchanged), fine ON = 14. Pine not yet compiled on TradingView.
   - **`core/`** (pure algorithm, no I/O, fully tested): `indicators.py`
     (Pine-matching RMA/ATR/RSI/SMA), `pivots.py`, `trendline.py`
     (build/validate/score), `breakout.py` (break test + volume/body filters),

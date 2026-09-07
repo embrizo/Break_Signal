@@ -429,3 +429,60 @@ Right-click chart → **Add alert** → Condition **Break Signal** → **Any ale
 **M2 — verify a real alert fires.** Load the indicator on 1D, set the alert, and wait for (or replay) a break. Confirm the push arrives and the JSON is well-formed.
 
 Then **M4** — port `core/` to Python and assert it reproduces the exact same lines on the same OKX candles. That test is the bridge between the two phases; if the numbers match, the Pi service is trustworthy.
+
+---
+
+## 11. New condition — finer trendline detection (multi-scale pivots)
+
+**Added 2026-09-07.** Motivated by a Gold 4h example where a valid descending
+trendline across a consolidation (connecting minor lower-highs) was drawn by hand
+but the indicator never produced it.
+
+### Why the line was missed
+
+The detector anchors lines on **fractal pivots** of a single lookback `L`
+(`pivotLen`, auto-tuned to 8 on 4H). The minor swing-highs a human connects are
+*not* `L`-bar fractal pivots, so those anchor points do not exist for the
+algorithm; the line either never forms or fails `minTouches`. Contributing
+factors, in order: (A) pivot lookback too coarse — the dominant cause; (B) too
+few touches once the fine highs are absent; (C) the strict zero-violation filter
+can kill a line on one small close-through; (D) `maxDist` hides a valid line once
+price has run far from it (a display effect, not a detection failure).
+
+### The change — a second, finer pivot scale
+
+Detect pivots at **two lookbacks** and merge them before building candidate lines:
+
+- the existing coarse `pivotLen` (stable, strong swings), **plus**
+- a new finer `pivotLenFine` (default **3**) that captures the minor lower-highs.
+
+The merged pivot set (deduped by bar, capped at `maxPivots` newest so loop bounds
+are unchanged) feeds the same build → validate → score → dedupe → top-N pipeline.
+Only lines that still pass the quality filters (`minTouches`, violations) survive,
+so the strict philosophy holds — there are simply more *valid* anchors to work
+with. The touch-cluster spacing also uses the finer lookback when fine pivots are
+on, so closely-spaced touches are counted.
+
+New inputs / params (default ON — the whole point is to catch these lines):
+
+| Pine input | Python `Params` | Default | Meaning |
+|---|---|---|---|
+| `Also detect finer pivots` | `use_fine_pivots` | `true` | master toggle |
+| `Fine pivot lookback` | `pivot_len_fine` | `3` | the second, shorter fractal lookback |
+
+### Parity & verification
+
+- Mirror the merge + swap-ordered pairing + touch-gap in both `pine/break_signal.pine`
+  and `core/{pivots,engine,trendline,params}.py` — the Pine↔Python invariant.
+- New test `test_detects_stepped_consolidation_only_with_fine_pivots`: a synthetic
+  descending line whose touches are pivots at `L=3` but *not* at `L=5`, so it is
+  undetected with `use_fine_pivots=False` and detected (≥3 touches) with it ON.
+- Phase 0 diagnostic (optional): a `debugCandidates` Pine toggle drawing every
+  post-filter candidate line, to confirm on the real chart which factor (A–D) was
+  the culprit before/after the change.
+
+### Follow-ups (not in this change)
+
+- Split "detect" vs "draw near price" so historical valid lines can be inspected
+  without cluttering the chart (addresses D).
+- Optional per-line violation tolerance for finer lines (addresses C).

@@ -19,7 +19,7 @@ def _build_side(
     side: str,
     params: Params,
     last_bar: int,
-    pivot_len: int,
+    touch_gap: int,
 ) -> list[Trendline]:
     """Generate every valid candidate line for one side (R from highs, S from lows)."""
     out: list[Trendline] = []
@@ -31,10 +31,12 @@ def _build_side(
     close = candles.close
 
     for i in range(n - 1):
-        ax = pivots[i]
-        ay = float(price[ax])
         for j in range(i + 1, n):
-            bx = pivots[j]
+            # Order the pair so ax is the older anchor (merged pivots may be
+            # multi-scale; don't assume the list is sorted).
+            p, q = pivots[i], pivots[j]
+            ax, bx = (p, q) if p < q else (q, p)
+            ay = float(price[ax])
             by = float(price[bx])
             if bx - ax < params.min_bars:
                 continue
@@ -67,7 +69,7 @@ def _build_side(
                 if viol > params.max_violations:
                     break
                 # touch = extreme kisses the line, at most one per pivot-window cluster
-                if abs(ext - lv) <= params.atr_touch * atr_last and (k - last_touch) >= pivot_len:
+                if abs(ext - lv) <= params.atr_touch * atr_last and (k - last_touch) >= touch_gap:
                     touches += 1
                     last_touch = k
 
@@ -127,13 +129,13 @@ def build_lines(
     pivot_lows: list[int],
     params: Params,
     last_bar: int,
-    pivot_len: int,
+    touch_gap: int,
     broken_ids: set[str] | None = None,
 ) -> list[Trendline]:
     """Return the active resistance + support lines at ``last_bar``."""
     broken_ids = broken_ids or set()
-    res = _build_side(candles, atr_last, pivot_highs, "R", params, last_bar, pivot_len)
-    sup = _build_side(candles, atr_last, pivot_lows, "S", params, last_bar, pivot_len)
+    res = _build_side(candles, atr_last, pivot_highs, "R", params, last_bar, touch_gap)
+    sup = _build_side(candles, atr_last, pivot_lows, "S", params, last_bar, touch_gap)
     return (
         _select_top(res, params, atr_last, last_bar, broken_ids)
         + _select_top(sup, params, atr_last, last_bar, broken_ids)

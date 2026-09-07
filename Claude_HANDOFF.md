@@ -67,6 +67,7 @@ Full spec: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) — algorithm (§2
 - **Validity walk stops at `last_bar - 1`.** In [trendline.py](src/break_signal/core/trendline.py) `_build_side` walks through `last_bar - 1`, NOT `last_bar` like the literal Pine loop. The Python engine rebuilds lines every bar in one pass; including the current bar would let a breaking close invalidate the line before the break block sees it. Walking to `last_bar-1` reproduces Pine's *effective* behaviour. **If Pine and Python ever disagree on a break bar, look here first.**
 - **Line id** is keyed on pivot open-time (ms): `f"{side}:{ts_a}:{ts_b}"`, not bar index — stable across restarts. (Pine uses `bar_index`; intentional divergence.)
 - **OKX candles are newest-first**; reverse before processing. Last array element is `"1"` when the bar is confirmed — only act on confirmed bars. History beyond ~100 bars: `/api/v5/market/history-candles`.
+- **Multi-scale pivots (Session 4).** Detection now merges a coarse (`pivot_len`) and a fine (`pivot_len_fine=3`) fractal scale so consolidation trendlines across minor swings are caught. Merged set is deduped + capped at `max_pivots` so loop bounds are unchanged. Pair building orders anchors explicitly (merged pivots aren't sorted). Toggle: `use_fine_pivots`. Keep Pine `mergeP`/`touchGap` in exact parity with `pivots.merge_pivots` + `engine.touch_gap`.
 
 ## Quick run commands
 
@@ -119,6 +120,10 @@ docker compose up -d --build
 6. **(Housekeeping) push `main`** to GitHub when ready — `3590c43` is local-only.
 
 ## Session log
+
+### Session 4 — 2026-09-07
+- **Added multi-scale pivot detection** (IMPLEMENTATION_PLAN.md §11). A user example (Gold 4h) showed a valid consolidation trendline the single-scale detector missed. Added a finer pivot pass (`use_fine_pivots`, `pivot_len_fine=3`) merged with the coarse scale; the touch-cluster gap shrinks to match. New inputs default ON. Mirrored in Pine (`useFine`/`pivotFine` + `mergeP` + swap-ordered pairing + a `debugCand` toggle that draws all candidates) and Python core (`params.py`, `pivots.merge_pivots`, `engine._pivot_bars`, `trendline` touch_gap).
+- Verified: 22 tests pass (2 new — a synthetic line detectable at L=3 but not L=5). Live replay: fine OFF = 12 signals (unchanged), fine ON = 14 (2 extra valid breaks). **Pine not compiled here — load it on TradingView to confirm; use `debugCand` to see candidates.**
 
 ### Session 3 — 2026-09-07
 - Ran `/handoff` on a fresh machine. **Found the `data/` package was missing** — never on disk, never committed, yet imported by `watcher.py` and `backtest/replay.py`, so both entry points crashed at import. Wrote `ANTIGRAVITY_HANDOFF.md` and rewrote this file.

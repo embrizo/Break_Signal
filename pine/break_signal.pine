@@ -34,7 +34,7 @@ type TL
     int    ax          // anchor A bar_index (older)
     float  ay          // anchor A price
     int    bx          // anchor B bar_index (newer)
-    float  by          // anchor B price
+    float  byPrice     // anchor B price
     float  slope       // price per bar
     int    touches
     float  score
@@ -51,6 +51,9 @@ maxPivots   = input.int  (10,   "Pivots kept per side",     minval = 4, maxval =
 maxAge      = input.int  (400,  "Forget pivots older than (bars)", minval = 100, group = gD)
 lookMax     = input.int  (300,  "Validation window (bars)", minval = 100, group = gD)
 minBars     = input.int  (10,   "Min bars between anchors", minval = 3,   group = gD)
+useFine     = input.bool (true, "Also detect finer pivots",  group = gD,
+     tooltip = "Adds a second, shorter pivot scale so consolidation trendlines drawn across minor swing highs/lows are detected — not just the strong fractal pivots.")
+pivotFine   = input.int  (3,    "Fine pivot lookback",   minval = 2, maxval = 10, group = gD)
 
 gQ = "Quality filters  (STRICT defaults)"
 minTouches  = input.int  (3,    "Min touches",              minval = 2, maxval = 8, group = gQ,
@@ -75,6 +78,8 @@ twoBar      = input.bool (false,"Require 2 consecutive closes beyond line", grou
 gV = "Visuals"
 showTable   = input.bool (true, "Show info table",  group = gV)
 showGhost   = input.bool (true, "Keep broken lines on chart", group = gV)
+debugCand   = input.bool (false,"DEBUG: draw all candidate lines", group = gV,
+     tooltip = "Diagnostic. Draws every line that passed touches+validity, before top-N/dedupe, in faint gray. Use it to see whether a line you expect is a candidate (kept out by scoring) or never anchored (a pivot problem).")
 colRes      = input.color(color.new(#f23645, 0), "Resistance", group = gV, inline = "c")
 colSup      = input.color(color.new(#089981, 0), "Support",    group = gV, inline = "c")
 colGhost    = input.color(color.new(#787b86, 55), "Broken",    group = gV, inline = "c")
@@ -84,6 +89,7 @@ colGhost    = input.color(color.new(#787b86, 55), "Broken",    group = gV, inlin
 // ───────────────────────────────────────────────────────────────────────────
 tfSec    = timeframe.in_seconds(timeframe.period)
 pivotLen = autoTune ? (tfSec >= 86400 ? 5 : tfSec >= 14400 ? 8 : 10) : pivotManual
+touchGap = useFine ? pivotFine : pivotLen   // cluster spacing shrinks with the finer scale
 
 atr    = ta.atr(14)
 volSma = ta.sma(volume, 20)
@@ -92,14 +98,19 @@ rsi    = ta.rsi(close, 14)
 // ───────────────────────────────────────────────────────────────────────────
 //  STATE
 // ───────────────────────────────────────────────────────────────────────────
-var array<int>    phX = array.new<int>()
+var array<int>    phX = array.new<int>()         // coarse pivot highs (bar index)
 var array<float>  phY = array.new<float>()
-var array<int>    plX = array.new<int>()
+var array<int>    plX = array.new<int>()         // coarse pivot lows
 var array<float>  plY = array.new<float>()
+var array<int>    phXf = array.new<int>()        // fine pivot highs (second scale)
+var array<float>  phYf = array.new<float>()
+var array<int>    plXf = array.new<int>()        // fine pivot lows
+var array<float>  plYf = array.new<float>()
 
 var array<TL>     active   = array.new<TL>()     // lines currently being watched
 var array<line>   drawn    = array.new<line>()   // drawing handles, parallel to `active`
 var array<line>   ghosts   = array.new<line>()   // frozen drawings of broken lines
+var array<line>   dbg      = array.new<line>()   // debug candidate drawings
 var array<string> brokenId = array.new<string>() // ids that already fired, never re-arm
 
 idOf(TL t) => t.side + ":" + str.tostring(t.ax) + ":" + str.tostring(t.bx)
@@ -110,6 +121,9 @@ valAt(TL t, int x) => t.ay + t.slope * (x - t.ax)
 // ───────────────────────────────────────────────────────────────────────────
 ph = ta.pivothigh(pivotLen, pivotLen)
 pl = ta.pivotlow (pivotLen, pivotLen)
+// second, finer scale — called unconditionally (const length), used only if useFine
+phF = ta.pivothigh(pivotFine, pivotFine)
+plF = ta.pivotlow (pivotFine, pivotFine)
 
 if not na(ph)
     array.push(phX, bar_index - pivotLen)
@@ -117,6 +131,12 @@ if not na(ph)
 if not na(pl)
     array.push(plX, bar_index - pivotLen)
     array.push(plY, pl)
+if useFine and not na(phF)
+    array.push(phXf, bar_index - pivotFine)
+    array.push(phYf, phF)
+if useFine and not na(plF)
+    array.push(plXf, bar_index - pivotFine)
+    array.push(plYf, plF)
 
 // trim by count and by age — this is what bounds every loop below
 trim(array<int> ax, array<float> ay) =>
@@ -129,6 +149,29 @@ trim(array<int> ax, array<float> ay) =>
 
 trim(phX, phY)
 trim(plX, plY)
+trim(phXf, phYf)
+trim(plXf, plYf)
+
+// merge two sorted-by-bar pivot arrays -> one set, deduped, capped at maxPivots newest
+mergeP(array<int> ax, array<float> ay, array<int> bx, array<float> by) =>
+    ox = array.copy(ax)
+    oy = array.copy(ay)
+    if array.size(bx) > 0
+        for i = 0 to array.size(bx) - 1
+            bb = array.get(bx, i)
+            if array.indexof(ox, bb) == -1
+                array.push(ox, bb)
+                array.push(oy, array.get(by, i))
+    while array.size(ox) > maxPivots            // drop the oldest (smallest bar) first
+        mi = 0
+        mv = array.get(ox, 0)
+        for i = 1 to array.size(ox) - 1
+            if array.get(ox, i) < mv
+                mv := array.get(ox, i)
+                mi := i
+        array.remove(ox, mi)
+        array.remove(oy, mi)
+    [ox, oy]
 
 // ───────────────────────────────────────────────────────────────────────────
 //  2-4. CANDIDATES -> VALIDATE -> SCORE
@@ -138,13 +181,19 @@ buildSide(array<int> px, array<float> py, string side) =>
     n   = array.size(px)
     if n >= 2 and not na(atr) and atr > 0
         for i = 0 to n - 2
-            ax = array.get(px, i)
-            ay = array.get(py, i)
             for j = i + 1 to n - 1
-                bx = array.get(px, j)
-                by = array.get(py, j)
+                // order the pair so ax is the older anchor (merged pivots from two
+                // scales are not guaranteed sorted)
+                pI = array.get(px, i)
+                pJ = array.get(px, j)
+                vI = array.get(py, i)
+                vJ = array.get(py, j)
+                ax = pI < pJ ? pI : pJ
+                ay = pI < pJ ? vI : vJ
+                bx = pI < pJ ? pJ : pI
+                byPrice = pI < pJ ? vJ : vI
                 if bx - ax >= minBars
-                    slope = (by - ay) / (bx - ax)
+                    slope = (byPrice - ay) / (bx - ax)
                     lvNow = ay + slope * (bar_index - ax)
                     // prune: line must live somewhere near current price
                     if math.abs(lvNow - close) <= maxDist * atr
@@ -167,14 +216,14 @@ buildSide(array<int> px, array<float> py, string side) =>
                             if viol > maxViol
                                 break
                             // touch: extreme kisses the line, counted once per cluster
-                            if math.abs(ext - lv) <= atrTouch * atr and (k - lastTouch) >= pivotLen
+                            if math.abs(ext - lv) <= atrTouch * atr and (k - lastTouch) >= touchGap
                                 touches   += 1
                                 lastTouch := k
                         if viol <= maxViol and touches >= minTouches
                             span    = math.min((bar_index - ax) / 200.0, 1.0)
                             recency = 1.0 / (1.0 + (bar_index - bx))
                             sc      = 3.0 * touches + 2.0 * span + 1.5 * recency
-                            array.push(out, TL.new(side, ax, ay, bx, by, slope, touches, sc))
+                            array.push(out, TL.new(side, ax, ay, bx, byPrice, slope, touches, sc))
     out
 
 // two lines are "the same line" if they sit on top of each other now and 50 bars ago
@@ -209,7 +258,7 @@ selectTop(array<TL> cands) =>
 // ───────────────────────────────────────────────────────────────────────────
 //  REBUILD — only when a new pivot confirms (roughly every `pivotLen` bars)
 // ───────────────────────────────────────────────────────────────────────────
-rebuild = (not na(ph) or not na(pl)) and not na(atr) and atr > 0
+rebuild = (not na(ph) or not na(pl) or (useFine and (not na(phF) or not na(plF)))) and not na(atr) and atr > 0
 
 if rebuild
     if array.size(drawn) > 0
@@ -217,9 +266,39 @@ if rebuild
             line.delete(array.get(drawn, i))
     array.clear(drawn)
     array.clear(active)
+    if array.size(dbg) > 0
+        for i = 0 to array.size(dbg) - 1
+            line.delete(array.get(dbg, i))
+    array.clear(dbg)
 
-    resSel = selectTop(buildSide(phX, phY, "R"))
-    supSel = selectTop(buildSide(plX, plY, "S"))
+    // merge the coarse + fine pivot scales (when fine is on) before building
+    rX = phX
+    rY = phY
+    sX = plX
+    sY = plY
+    if useFine
+        [mrx, mry] = mergeP(phX, phY, phXf, phYf)
+        [msx, msy] = mergeP(plX, plY, plXf, plYf)
+        rX := mrx
+        rY := mry
+        sX := msx
+        sY := msy
+
+    resCand = buildSide(rX, rY, "R")
+    supCand = buildSide(sX, sY, "S")
+
+    // DEBUG: draw every candidate (post-touch/validity, pre-select) in faint gray
+    if debugCand
+        allCand = array.concat(array.copy(resCand), supCand)
+        if array.size(allCand) > 0
+            for i = 0 to array.size(allCand) - 1
+                t = array.get(allCand, i)
+                array.push(dbg, line.new(t.ax, t.ay, bar_index, valAt(t, bar_index),
+                     xloc = xloc.bar_index, extend = extend.right,
+                     color = color.new(color.gray, 70), width = 1, style = line.style_dotted))
+
+    resSel = selectTop(resCand)
+    supSel = selectTop(supCand)
 
     if array.size(resSel) > 0
         for i = 0 to array.size(resSel) - 1
@@ -231,7 +310,7 @@ if rebuild
     if array.size(active) > 0
         for i = 0 to array.size(active) - 1
             t = array.get(active, i)
-            array.push(drawn, line.new(t.ax, t.ay, t.bx, t.by, xloc = xloc.bar_index,
+            array.push(drawn, line.new(t.ax, t.ay, t.bx, t.byPrice, xloc = xloc.bar_index,
                  extend = extend.right, color = t.side == "R" ? colRes : colSup,
                  width = 2, style = line.style_solid))
 

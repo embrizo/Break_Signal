@@ -14,7 +14,10 @@ watches:
 params:
   pivot_len_auto: true        # true -> 5 on >=1D, 8 on >=4H, else 10
   pivot_len: 5                # used only when pivot_len_auto is false
-  max_pivots: 10              # pivots kept per side
+  use_fine_pivots: true       # ALSO detect a finer pivot scale (catches consolidation
+                              # trendlines a human draws that the coarse scale misses)
+  pivot_len_fine: 3           # the finer fractal lookback merged with the coarse one
+  max_pivots: 10              # pivots kept per side (cap on the MERGED set)
   max_age: 400                # forget pivots older than N bars
   look_max: 300               # validation window (bars)
   min_bars: 10                # min bars between two anchors

@@ -40,3 +40,16 @@ def pivot_highs(high: np.ndarray, L: int) -> list[int]:
 
 def pivot_lows(low: np.ndarray, L: int) -> list[int]:
     return _pivots(low, L, want_high=False)
+
+
+def merge_pivots(coarse: list[int], fine: list[int], max_pivots: int) -> list[int]:
+    """Union two pivot-bar lists, deduped and sorted, keeping the newest ``max_pivots``.
+
+    Multi-scale detection: a coarse lookback gives stable strong swings, a finer
+    one adds the minor highs/lows a human would still connect. Capping at
+    ``max_pivots`` keeps the O(P^2) candidate-pair loop bounded exactly as before.
+    """
+    merged = sorted(set(coarse) | set(fine))
+    if len(merged) > max_pivots:
+        merged = merged[-max_pivots:]
+    return merged
