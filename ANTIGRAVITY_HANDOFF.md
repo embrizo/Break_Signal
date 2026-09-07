@@ -15,10 +15,16 @@ runtime path) has been written and smoke-tested against live OKX data:
 - REST backfill returns 500 clean SOL-USDT-SWAP 1D candles (oldest-first, no NaNs).
 - `backtest/replay.py` runs end to end → 12 signals over 500 real candles.
 
-**Not yet exercised live:** the WebSocket stream (`okx_ws.stream_closed_candles`)
-and the notify layer — no live break has fired to Telegram/Discord. That is the
-current frontier (M5). The `data/` files may still be uncommitted — check
-`git status` (see Section 6, Task 1).
+- WebSocket verified live too: `okx_ws.stream_closed_candles` on `candle1m`
+  yielded a confirmed candle in ~13s.
+
+All committed as `3590c43` (local, not pushed), along with a `.gitignore` fix
+(see below). **Not yet exercised live:** only the notify layer (Telegram/Discord)
+— no live break alert has fired, and it needs real secrets. That is the last M5 piece.
+
+**Root cause of the earlier missing package:** `.gitignore` had an unanchored
+`data/` rule (for the Docker state volume) that also matched `src/break_signal/data/`,
+so Session 2's source package was silently never committed. Now anchored to `/data/`.
 
 ---
 
@@ -60,7 +66,7 @@ Two implementations of one algorithm, kept in parity:
     `/candles` + `/history-candles`, confirmed bars only, reversed oldest-first),
     `okx_ws.py` (live WebSocket stream on the business endpoint, text `ping`/`pong`
     heartbeat, reconnect with backoff, yields only confirmed candles). Hosts
-    overridable via `OKX_REST_URL` / `OKX_WS_URL`. REST verified live; WS not yet.
+    overridable via `OKX_REST_URL` / `OKX_WS_URL`. Both REST and WS verified live.
   - **`notify/`**: `base.py` (Notifier protocol), `telegram.py` (sendPhoto +
     caption), `discord.py` (multipart webhook). Channel failures are isolated.
   - **`render/chart.py`**: mplfinance snapshot with the active lines drawn.
@@ -141,9 +147,9 @@ docker compose logs -f
   `core/` algorithm with 20 passing tests; `data/` REST + WS layer (REST verified
   live); `backtest/replay.py` runs end to end on real OKX data; `notify/`, `render/`,
   Docker + config scaffolding. Repo: https://github.com/embrizo/Break_Signal, `main`.
-- **Remaining:** the live WS + notify path (M5) has not fired a real alert yet;
-  the M6 multi-symbol hit-rate *report* is not produced; deploy (M7) not done. The
-  `data/` files may still be uncommitted — check `git status`.
+- **Remaining:** the notify path (M5) has not fired a real alert yet (needs
+  secrets); the M6 multi-symbol hit-rate *report* is not produced; deploy (M7) not
+  done. All source is committed as `3590c43` (local, not pushed to GitHub).
 - **Invariants (a change can silently break these):**
   - **Pine ↔ Python parity.** Both must produce the same signals on the same
     candles. The subtle rule: the Python validity walk in `trendline._build_side`
@@ -172,21 +178,18 @@ docker compose logs -f
 
 ## 6. Next Steps
 
-- [ ] **Task 1 — commit `data/`** if `git status` shows it untracked (written
-      2026-09-07: `__init__.py`, `okx_rest.py`, `okx_ws.py`).
-- [ ] **Task 2 — live WS smoke test:** confirm `okx_ws.stream_closed_candles`
-      actually receives a confirmed candle from `wss://ws.okx.com:8443/ws/v5/business`
-      (the one code path not yet exercised live).
-- [ ] **Task 3 — go live (M5):** create `config.yaml` with real Telegram + Discord
+- [ ] **Task 1 — go live (M5):** create `config.yaml` with real Telegram + Discord
       secrets; run the watcher and confirm a real break alerts on both channels
-      (validates notify + render end to end).
-- [ ] **Task 4 — TradingView verification (user):** load `pine/break_signal.pine`,
+      (validates notify + render end to end — the only M5 piece left; REST + WS data
+      paths already verified live).
+- [ ] **Task 2 — TradingView verification (user):** load `pine/break_signal.pine`,
       confirm auto lines match the reference screenshot, tune `pivotLen`/`atrBreak`,
       then mirror the tuning into `config.example.yaml`.
-- [ ] **Task 5 — deploy to Pi 5:** `docker compose up -d --build`; put the state dir
+- [ ] **Task 3 — deploy to Pi 5:** `docker compose up -d --build`; put the state dir
       on an SSD/USB, not the SD card.
-- [ ] **Task 6 — backtest report (M6):** extend `replay.py` into a hit-rate summary
+- [ ] **Task 4 — backtest report (M6):** extend `replay.py` into a hit-rate summary
       over ~12 months across SOL + BTC + ETH to check the strict defaults aren't
       overfit to SOL.
-- [ ] **Task 7 (optional) — Phase 3 dashboard:** FastAPI + TradingView Lightweight
+- [ ] **Task 5 (optional) — Phase 3 dashboard:** FastAPI + TradingView Lightweight
       Charts.
+- [ ] **Housekeeping — push `main`:** commit `3590c43` is local-only.
