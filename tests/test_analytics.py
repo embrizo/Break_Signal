@@ -112,6 +112,37 @@ def test_empty_summary():
     assert s["streaks"]["current"] == 0
 
 
+def test_counts_follow_stored_outcome_not_r():
+    """A user-overridden outcome wins over the sign of R; R-based figures still use R."""
+    db = JournalDB(":memory:")
+    a = db.add_trade("SOL-USDT-SWAP", "LONG", entry_price=100, sl_price=90, opened_ts=1)
+    db.close_trade(a.id, 105, outcome="BE", closed_ts=2)          # R=+0.5 but declared BE
+    b = db.add_trade("SOL-USDT-SWAP", "LONG", entry_price=100, sl_price=90, opened_ts=3)
+    db.close_trade(b.id, 120, closed_ts=4)                        # derived WIN, R=+2
+    c = db.add_trade("SOL-USDT-SWAP", "LONG", entry_price=100, opened_ts=5)   # no stop → no R
+    db.close_trade(c.id, 130, outcome="win", closed_ts=6)
+    s = A.summarize(db.list_trades())
+    assert (s["n"], s["r_n"]) == (3, 2)
+    assert (s["wins"], s["losses"], s["be"]) == (2, 0, 1)
+    assert s["win_rate"] == pytest.approx(2 / 3, abs=1e-3)
+    assert s["avg_r"] == pytest.approx(1.25)                      # (0.5 + 2) / 2
+    assert s["avg_win_r"] == pytest.approx(2.0)                   # only the WIN with an R
+    assert s["streaks"] == {"max_win": 2, "max_loss": 0, "current": 2, "current_kind": "WIN"}
+    assert [p["trade_id"] for p in A.equity_curve(db.list_trades())] == [a.id, b.id]
+    assert len(db.list_trades(outcome="WIN")) == s["wins"]        # search and stats agree
+    db.close()
+
+
+def test_tag_in_both_phases_counted_once():
+    db = JournalDB(":memory:")
+    t = db.add_trade("SOL-USDT-SWAP", "LONG", entry_price=100, sl_price=90, entry_tags=["Breakout"])
+    db.close_trade(t.id, 110, exit_tags=["Breakout"])
+    assert A.tag_stats(db.list_trades())["Breakout"]["n"] == 1
+    assert A.tag_stats(db.list_trades(), "ENTRY")["Breakout"]["n"] == 1
+    assert A.tag_stats(db.list_trades(), "EXIT")["Breakout"]["n"] == 1
+    db.close()
+
+
 def test_tag_stats_golden(trades):
     ts = A.tag_stats(trades, "ENTRY")
     assert list(ts)[:1] == ["Breakout"]  # largest n first

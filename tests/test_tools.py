@@ -54,6 +54,25 @@ def test_add_trade_auto_links_recent_signal_and_copies_ctx(tools):
     assert out3["auto_linked_signal"] is None
 
 
+def test_add_trade_unknown_tf_skips_autolink_but_logs(tools):
+    out = tools.add_trade("SOL", "LONG", tf="8H", entry_price=100, sl_price=95)
+    assert out["trade"]["tf"] == "8H" and out["auto_linked_signal"] is None
+
+
+def test_add_trade_explicit_signal_copies_ctx_and_validates(tools):
+    sid = tools.db.insert_signal({**SIG, "time": "2026-01-01T00:00:00Z"}, "backtest")
+    out = tools.add_trade("SOL", "LONG", tf="4H", entry_price=100, sl_price=95, signal_id=sid)
+    assert out["trade"]["signal_id"] == sid and out["auto_linked_signal"] is None
+    assert out["trade"]["ctx_rsi"] == 61.3 and out["trade"]["ctx_atr_dist"] == 0.35
+    with pytest.raises(KeyError):
+        tools.add_trade("SOL", "LONG", signal_id=999)
+
+
+def test_json_keeps_inf_profit_factor():
+    from break_signal.journal.tools import _json
+    assert _json({"pf": float("inf"), "x": float("nan"), "y": 1.5}) == {"pf": "inf", "x": None, "y": 1.5}
+
+
 def test_add_trade_old_signal_not_linked(tools):
     tools.db.insert_signal({**SIG, "time": "2026-01-01T00:00:00Z"}, "backtest")  # far outside 3 bars
     out = tools.add_trade("SOL", "LONG", tf="4H")

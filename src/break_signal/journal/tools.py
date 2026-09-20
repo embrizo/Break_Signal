@@ -28,14 +28,20 @@ AUTO_LINK_BARS = 3   # a new trade links to a matching alert within this many ba
 
 
 def _json(x: Any) -> Any:
-    """Recursively convert numpy scalars / NaN so the result is JSON-safe."""
+    """Recursively convert numpy scalars so the result is JSON-safe. NaN → null;
+    ±inf → the string "inf"/"-inf" (an all-winning profit factor is real
+    information, not missing data)."""
     if isinstance(x, dict):
         return {k: _json(v) for k, v in x.items()}
     if isinstance(x, (list, tuple)):
         return [_json(v) for v in x]
     if isinstance(x, (np.floating, float)):
         f = float(x)
-        return None if math.isnan(f) or math.isinf(f) else f
+        if math.isnan(f):
+            return None
+        if math.isinf(f):
+            return "inf" if f > 0 else "-inf"
+        return f
     if isinstance(x, np.integer):
         return int(x)
     if isinstance(x, np.bool_):
@@ -287,15 +293,27 @@ class Tools:
         direction-consistent event) within the last 3 bars and copies its RSI/ATR context."""
         symbol = self._sym(symbol)
         direction = direction.upper()
-        if signal_id is None and auto_link and tf:
+        auto_linked: int | None = None
+        sig = None
+        if signal_id is not None:
+            sig = self.db.get_signal(signal_id)
+            if sig is None:
+                raise KeyError(f"no signal #{signal_id}")
+        elif auto_link and tf:
             event = "break_up" if direction == "LONG" else "break_down"
-            since = now_ms() - AUTO_LINK_BARS * bar_seconds(tf) * 1000
-            sig = self.db.latest_signal(symbol, tf=tf, event=event, since=since)
-            if sig:
-                signal_id = sig.id
-                ctx_rsi = ctx_rsi if ctx_rsi is not None else sig.rsi
-                ctx_atr_dist = ctx_atr_dist if ctx_atr_dist is not None else sig.atr_dist
-                ctx_vol_ratio = ctx_vol_ratio if ctx_vol_ratio is not None else sig.vol_ratio
+            try:
+                since = now_ms() - AUTO_LINK_BARS * bar_seconds(tf) * 1000
+            except ValueError:
+                since = None            # tf not an OKX bar (e.g. 8H): log the trade, skip linking
+            if since is not None:
+                sig = self.db.latest_signal(symbol, tf=tf, event=event, since=since)
+                if sig:
+                    signal_id = auto_linked = sig.id
+        if sig:
+            # Copy the alert's market context unless the caller supplied it.
+            ctx_rsi = ctx_rsi if ctx_rsi is not None else sig.rsi
+            ctx_atr_dist = ctx_atr_dist if ctx_atr_dist is not None else sig.atr_dist
+            ctx_vol_ratio = ctx_vol_ratio if ctx_vol_ratio is not None else sig.vol_ratio
         t = self.db.add_trade(
             symbol, direction, entry_tags=tags, tf=tf, entry_price=entry_price, sl_price=sl_price,
             tp_price=tp_price, entry_reason=entry_reason, position_size=position_size,
@@ -305,7 +323,7 @@ class Tools:
         )
         check = rules.check(self.db, t)
         rules.record_violations(self.db, t.id, check)
-        return _json({"trade": trade_dict(t), "auto_linked_signal": signal_id,
+        return _json({"trade": trade_dict(t), "auto_linked_signal": auto_linked,
                       "rule_violations": check["violations"]})
 
     def add_trade_line(self, text: str, signal_id: int | None = None) -> dict:

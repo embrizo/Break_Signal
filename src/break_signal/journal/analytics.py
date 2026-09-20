@@ -8,10 +8,15 @@ Conventions
 -----------
 - R-multiple is signed by direction: ``(exit-entry)/(entry-sl)`` for LONG,
   ``(entry-exit)/(sl-entry)`` for SHORT. Requires entry, sl and exit.
-- ``BE`` (break-even) when ``|R| < BE_THRESHOLD``; the user may override
-  the outcome at close time (partial fills etc.) but R itself is never edited.
-- ``win_rate = wins / n`` where ``n`` counts every closed trade (BE included).
-- Profit factor is in R: ``sum(R > 0) / |sum(R < 0)|``.
+- ``outcome`` defaults to the sign of R (``BE`` when ``|R| < BE_THRESHOLD``);
+  the user may override it at close time (partial fills etc.). R is never edited.
+- **Wins / losses / BE / streaks are counted by the stored ``outcome``**, so the
+  stats always agree with ``search_trades(outcome=...)``. ``n`` counts every
+  closed trade that has an outcome (BE included); ``win_rate = wins / n``.
+- R-based figures (avg R, PF, drawdown, curve) use the subset that has an R
+  value (``r_n``): a trade closed without a stop has an outcome but no R.
+- Profit factor is in R, by outcome: ``sum(R of WIN) / |sum(R of LOSS)|``; BE
+  trades contribute to ``total_r`` but not to PF.
 - Drawdown is measured on the cumulative-R equity curve, trades ordered by
   ``closed_ts``.
 """
@@ -128,25 +133,37 @@ def period_to_since(period: str | None, now_ms: int | None = None) -> int | None
 
 # ── aggregates ───────────────────────────────────────────────────────────────
 def closed(trades: list[Trade]) -> list[Trade]:
-    """Closed trades that have an R value, oldest close first."""
-    out = [t for t in trades if t.status == "CLOSED" and t.r_multiple is not None]
+    """Closed trades that have an outcome, oldest close first."""
+    out = [t for t in trades if t.status == "CLOSED" and t.outcome is not None]
     return sorted(out, key=lambda t: (t.closed_ts or 0, t.id))
+
+
+def with_r(trades: list[Trade]) -> list[Trade]:
+    """The subset of ``closed()`` that also has an R value."""
+    return [t for t in closed(trades) if t.r_multiple is not None]
 
 
 def _round(x: float | None, nd: int = 3) -> float | None:
     return None if x is None else round(x, nd)
 
 
+def _mean(xs: list[float]) -> float | None:
+    return _round(sum(xs) / len(xs)) if xs else None
+
+
 def summarize(trades: list[Trade]) -> dict:
-    """Core numbers for a set of trades. Always includes ``n``."""
+    """Core numbers for a set of trades. Always includes ``n`` (outcome-bearing
+    closed trades) and ``r_n`` (those that also have an R)."""
     ts = closed(trades)
     n = len(ts)
-    rs = [t.r_multiple for t in ts]  # type: ignore[misc]
-    wins = [r for r in rs if r > BE_THRESHOLD]
-    losses = [r for r in rs if r < -BE_THRESHOLD]
-    be = n - len(wins) - len(losses)
-    gross_win = sum(wins)
-    gross_loss = -sum(losses)
+    wins = [t for t in ts if t.outcome == "WIN"]
+    losses = [t for t in ts if t.outcome == "LOSS"]
+    be = [t for t in ts if t.outcome == "BE"]
+    rs = [t.r_multiple for t in ts if t.r_multiple is not None]
+    win_rs = [t.r_multiple for t in wins if t.r_multiple is not None]
+    loss_rs = [t.r_multiple for t in losses if t.r_multiple is not None]
+    gross_win = sum(win_rs)          # BE trades are neutral: in total_r, not in PF
+    gross_loss = -sum(loss_rs)
     pf: float | None
     if gross_loss > 0:
         pf = gross_win / gross_loss
@@ -156,17 +173,18 @@ def summarize(trades: list[Trade]) -> dict:
     curve = equity_curve(ts)
     return {
         "n": n,
+        "r_n": len(rs),
         "wins": len(wins),
         "losses": len(losses),
-        "be": be,
+        "be": len(be),
         "win_rate": _round(len(wins) / n) if n else None,
-        "avg_r": _round(sum(rs) / n) if n else None,          # expectancy in R
-        "expectancy_r": _round(sum(rs) / n) if n else None,
-        "total_r": _round(sum(rs)) if n else None,
-        "avg_win_r": _round(sum(wins) / len(wins)) if wins else None,
-        "avg_loss_r": _round(sum(losses) / len(losses)) if losses else None,
+        "avg_r": _mean(rs),          # expectancy in R
+        "expectancy_r": _mean(rs),
+        "total_r": _round(sum(rs)) if rs else None,
+        "avg_win_r": _mean(win_rs),
+        "avg_loss_r": _mean(loss_rs),
         "profit_factor": _round(pf) if pf not in (None, float("inf")) else pf,
-        "max_drawdown_r": _round(max_drawdown(curve)) if n else None,
+        "max_drawdown_r": _round(max_drawdown(curve)) if rs else None,
         "streaks": streaks(ts),
         "total_pnl": _round(sum(pnl), 2) if pnl else None,
         "pnl_n": len(pnl),
@@ -174,10 +192,10 @@ def summarize(trades: list[Trade]) -> dict:
 
 
 def equity_curve(trades: list[Trade]) -> list[dict]:
-    """Cumulative R after each closed trade: ``[{ts, trade_id, r, cum_r}]``."""
+    """Cumulative R after each closed trade with an R: ``[{ts, trade_id, r, cum_r}]``."""
     cum = 0.0
     out = []
-    for t in closed(trades):
+    for t in with_r(trades):
         cum += t.r_multiple  # type: ignore[operator]
         out.append({"ts": t.closed_ts, "trade_id": t.id, "r": round(t.r_multiple, 3),  # type: ignore[arg-type]
                     "cum_r": round(cum, 3)})
@@ -195,11 +213,12 @@ def max_drawdown(curve: list[dict]) -> float:
 
 
 def streaks(trades: list[Trade]) -> dict:
-    """Longest win / loss runs and the run currently in progress (BE breaks a run)."""
+    """Longest win / loss runs and the run currently in progress, by stored
+    ``outcome`` (BE breaks a run)."""
     best_w = best_l = cur = 0
     cur_kind: str | None = None
     for t in closed(trades):
-        kind = derive_outcome(t.r_multiple)
+        kind = t.outcome
         if kind == cur_kind and kind in ("WIN", "LOSS"):
             cur += 1
         elif kind in ("WIN", "LOSS"):
@@ -216,7 +235,8 @@ def streaks(trades: list[Trade]) -> dict:
 
 def group_stats(trades: list[Trade], key) -> dict[str, dict]:
     """``summarize()`` per bucket, where ``key(trade)`` yields one or more
-    bucket labels (a str, or an iterable of str). ``None`` labels are skipped.
+    bucket labels (a str, or an iterable of str). ``None`` labels are skipped and
+    duplicates count once (a tag used at both ENTRY and EXIT is one trade).
     Sorted by n desc, then label."""
     buckets: dict[str, list[Trade]] = defaultdict(list)
     for t in closed(trades):
@@ -225,7 +245,7 @@ def group_stats(trades: list[Trade], key) -> dict[str, dict]:
             continue
         if isinstance(labels, str):
             labels = [labels]
-        for lab in labels:
+        for lab in dict.fromkeys(labels):
             if lab is not None:
                 buckets[lab].append(t)
     out = {lab: summarize(ts) for lab, ts in buckets.items()}

@@ -424,8 +424,13 @@ second phase** — it is the thing you asked for and needs no API key or Telegra
 
 Implementation notes (J0):
 - `outcome` CHECK is `IN ('WIN','LOSS','BE')` (NULL passes CHECK by SQL semantics; the `,NULL` in §4.1 was wrong).
-- `win_rate = wins / n_closed` (BE counts in n). PF is in R. `derive_outcome` uses the ±0.1R BE band; the user's
-  stated outcome wins over the derived one but R itself is never edited.
+- **Wins / losses / BE / streaks / PF are counted by the stored `outcome`** (review fix 2026-09-20), so
+  `journal_stats` always agrees with `journal_search_trades(outcome=…)`. `outcome` defaults to the sign of R
+  (±0.1R BE band); the user's stated outcome wins over the derived one; R itself is never edited. `n` = closed
+  trades with an outcome; `r_n` = those that also have an R (avg R / PF / drawdown use only these).
+- Over MCP, an all-winning profit factor is the string `"inf"` (JSON has no infinity); `null` means no data.
+- The CLI's `add / close / skip / event` go through `journal/tools.py` like the MCP server, so rule checks,
+  seeding, auto-link and signal-context copying are identical across front-ends.
 - Tags: `#liquidity_sweep` → "liquidity sweep" (underscore → space) so one-word chips can hit multi-word seed tags.
   `#12` is accepted as a trade id in `close`. Unknown tags are created with category OTHER.
 - `insert_signal` accepts a `core.types.Signal` directly and derives `candle_ts` from its ISO `time`.

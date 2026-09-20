@@ -305,7 +305,13 @@ class JournalDB:
         tag = self.get_tag(old)
         if not tag:
             raise KeyError(f"no tag {old!r}")
-        self.conn.execute("UPDATE tags SET name=? WHERE id=?", (new.strip(), tag.id))
+        new = new.strip()
+        if not new:
+            raise ValueError("empty tag name")
+        clash = self.get_tag(new)
+        if clash and clash.id != tag.id:
+            raise ValueError(f"tag {clash.name!r} already exists (names are case-insensitive)")
+        self.conn.execute("UPDATE tags SET name=? WHERE id=?", (new, tag.id))
         self.conn.commit()
         return Tag(id=tag.id, name=new.strip(), category=tag.category)
 

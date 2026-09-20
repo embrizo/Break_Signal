@@ -175,6 +175,11 @@ def test_tag_ops(db):
     assert db.get_trade(t.id).exit_tags == []
     renamed = db.rename_tag("Breakout", "BO")
     assert renamed.name == "BO" and db.get_trade(t.id).entry_tags == ["BO"]
+    assert db.rename_tag("BO", "bo").name == "bo"          # case-only rename of itself is fine
+    with pytest.raises(ValueError):
+        db.rename_tag("bo", "fomo")                         # clashes with seeded FOMO (NOCASE)
+    with pytest.raises(ValueError):
+        db.rename_tag("bo", "  ")
     assert db.set_tag_category("BO", "OTHER").category == "OTHER"
     with pytest.raises(ValueError):
         db.get_or_create_tag("x", "NOPE")

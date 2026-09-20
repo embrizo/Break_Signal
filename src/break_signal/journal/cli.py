@@ -10,6 +10,7 @@ import argparse
 import csv
 import io
 import json
+import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,7 +18,8 @@ from pathlib import Path
 from . import analytics
 from .db import JournalDB, now_ms
 from .models import TAG_CATEGORIES, Trade
-from .parser import ParseError, parse_close, parse_trade
+from .parser import ParseError
+from .tools import Tools
 
 DEFAULT_DB = "data/journal.db"
 
@@ -84,34 +86,40 @@ def _group_table(groups: dict[str, dict]) -> str:
 
 
 # ── command handlers ─────────────────────────────────────────────────────────
-def cmd_add(db: JournalDB, args, aliases) -> int:
-    p = parse_trade(" ".join(args.line), aliases)
-    kw = p.db_fields()
-    if args.signal is not None:
-        kw["signal_id"] = args.signal
-    t = db.add_trade(p.symbol, p.direction, entry_tags=p.tags, **kw)
-    rr = analytics.planned_rr(t.direction, t.entry_price, t.sl_price, t.tp_price)
-    print(f"added trade #{t.id}: {t.symbol} {t.tf or ''} {t.direction} @ {_f(t.entry_price, 4)} "
-          f"sl {_f(t.sl_price, 4)} tp {_f(t.tp_price, 4)}  planned R:R={_f(rr)}  tags={t.tags}")
+def _print_violations(vs: list[dict]) -> None:
+    for v in vs:
+        print(f"  ⚠ rule '{v['name']}' ({v['severity']}): {v['detail']}")
+
+
+# Writes go through Tools so the CLI, the MCP server and the Telegram bot behave
+# identically: rule checks, auto-linking, signal context, seeded rules.
+def cmd_add(db: JournalDB, args, tools: Tools) -> int:
+    out = tools.add_trade_line(" ".join(args.line), signal_id=args.signal)
+    t = out["trade"]
+    print(f"added trade #{t['id']}: {t['symbol']} {t['tf'] or ''} {t['direction']} @ {_f(t['entry_price'], 4)} "
+          f"sl {_f(t['sl_price'], 4)} tp {_f(t['tp_price'], 4)}  planned R:R={_f(t['planned_rr'])}  "
+          f"tags={t['entry_tags']}"
+          + (f"  linked signal #{out['auto_linked_signal']}" if out["auto_linked_signal"] else ""))
+    _print_violations(out["rule_violations"])
     return 0
 
 
-def cmd_close(db: JournalDB, args, aliases) -> int:
-    p = parse_close(" ".join(args.line))
-    t = db.close_trade(p.trade_id, p.exit_price, outcome=p.outcome, exit_reason=p.reason,
-                       exit_tags=p.tags)
-    print(f"closed trade #{t.id}: {t.outcome} R={_f(t.r_multiple)} pnl={_f(t.pnl_amount)} "
-          f"exit_tags={t.exit_tags}")
+def cmd_close(db: JournalDB, args, tools: Tools) -> int:
+    out = tools.close_trade_line(" ".join(args.line))
+    t = out["trade"]
+    print(f"closed trade #{t['id']}: {t['outcome']} R={_f(t['r_multiple'])} pnl={_f(t['pnl_amount'])} "
+          f"exit_tags={t['exit_tags']}")
+    _print_violations(out["rule_violations"])
     return 0
 
 
-def cmd_skip(db: JournalDB, args, aliases) -> int:
-    t = db.skip_signal(args.signal_id, reason=" ".join(args.reason) or None, tags=args.tag)
-    print(f"recorded skip #{t.id} on signal #{args.signal_id} ({t.symbol} {t.tf} {t.direction})")
+def cmd_skip(db: JournalDB, args, tools: Tools) -> int:
+    t = tools.skip_signal(args.signal_id, reason=" ".join(args.reason) or None, tags=args.tag)["trade"]
+    print(f"recorded skip #{t['id']} on signal #{args.signal_id} ({t['symbol']} {t['tf']} {t['direction']})")
     return 0
 
 
-def cmd_event(db: JournalDB, args, aliases) -> int:
+def cmd_event(db: JournalDB, args, tools: Tools) -> int:
     data = {}
     for kv in args.data:
         k, _, v = kv.partition("=")
@@ -119,12 +127,14 @@ def cmd_event(db: JournalDB, args, aliases) -> int:
             data[k] = float(v)
         except ValueError:
             data[k] = v
-    e = db.add_event(args.trade_id, args.type, data)
-    print(f"event #{e.id} on trade #{e.trade_id}: {e.type} {e.data}")
+    out = tools.add_event(args.trade_id, args.type, data)
+    e = out["event"]
+    print(f"event #{e['id']} on trade #{e['trade_id']}: {e['type']} {e['data']}")
+    _print_violations(out["rule_violations"])
     return 0
 
 
-def cmd_tag(db: JournalDB, args, aliases) -> int:
+def cmd_tag(db: JournalDB, args, tools: Tools) -> int:
     if args.tag_cmd == "list":
         tags = db.list_tags(args.category)
         print(_table([[t.category, t.name] for t in tags], ["category", "name"]))
@@ -156,7 +166,7 @@ def _filtered(db: JournalDB, args) -> list[Trade]:
     )
 
 
-def cmd_list(db: JournalDB, args, aliases) -> int:
+def cmd_list(db: JournalDB, args, tools: Tools) -> int:
     trades = _filtered(db, args)
     if not trades:
         print("no trades")
@@ -165,7 +175,7 @@ def cmd_list(db: JournalDB, args, aliases) -> int:
     return 0
 
 
-def cmd_show(db: JournalDB, args, aliases) -> int:
+def cmd_show(db: JournalDB, args, tools: Tools) -> int:
     t = db.get_trade(args.trade_id)
     if t is None:
         print(f"no trade #{args.trade_id}", file=sys.stderr)
@@ -199,7 +209,7 @@ def cmd_show(db: JournalDB, args, aliases) -> int:
     return 0
 
 
-def cmd_signals(db: JournalDB, args, aliases) -> int:
+def cmd_signals(db: JournalDB, args, tools: Tools) -> int:
     sigs = db.list_signals(symbol=args.symbol, tf=args.tf, source=args.source, limit=args.limit)
     if not sigs:
         print("no signals")
@@ -238,13 +248,13 @@ def import_signals_csv(db: JournalDB, path: str, source: str = "backtest",
     return after - before, n
 
 
-def cmd_import_signals(db: JournalDB, args, aliases) -> int:
+def cmd_import_signals(db: JournalDB, args, tools: Tools) -> int:
     inserted, n = import_signals_csv(db, args.csv, source=args.source, symbol=args.symbol)
     print(f"imported {inserted} new of {n} rows from {args.csv} (source={args.source})")
     return 0
 
 
-def cmd_footer(db: JournalDB, args, aliases) -> int:
+def cmd_footer(db: JournalDB, args, tools: Tools) -> int:
     """Preview the alert footer for a stored signal."""
     from .footer import alert_footer
     sig = db.get_signal(args.signal_id)
@@ -257,7 +267,7 @@ def cmd_footer(db: JournalDB, args, aliases) -> int:
     return 0
 
 
-def cmd_stats(db: JournalDB, args, aliases) -> int:
+def cmd_stats(db: JournalDB, args, tools: Tools) -> int:
     trades = _filtered(db, args)
     label = f"period={args.period or 'all'}" + (f" symbol={args.symbol}" if args.symbol else "") \
         + (f" tf={args.tf}" if args.tf else "")
@@ -283,7 +293,7 @@ def cmd_stats(db: JournalDB, args, aliases) -> int:
     return 0
 
 
-def cmd_export(db: JournalDB, args, aliases) -> int:
+def cmd_export(db: JournalDB, args, tools: Tools) -> int:
     trades = list(reversed(_filtered(db, args)))  # oldest first for reading
     if args.format == "json":
         text = json.dumps([t.to_dict() for t in trades], ensure_ascii=False, indent=2)
@@ -421,33 +431,31 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
-def _open_db(args) -> tuple[JournalDB, dict[str, str]]:
+def _open_tools(args) -> Tools:
+    """Resolve config (optional) → JournalDB → Tools, the same surface the MCP server uses."""
+    from ..config import Config, load_config
+
     db_path = args.db
-    aliases: dict[str, str] = {}
+    cfg: Config | None = None
     account_size = None
     cfg_path = Path(args.config)
     if cfg_path.exists():
-        from ..config import load_config
         cfg = load_config(cfg_path)
-        aliases = cfg.journal.symbol_aliases
         account_size = cfg.journal.account_size
         db_path = db_path or cfg.journal.db
-    else:
-        from ..config import JournalCfg
-        aliases = JournalCfg().symbol_aliases
-    return JournalDB(db_path or DEFAULT_DB, account_size=account_size), aliases
+    return Tools(JournalDB(db_path or DEFAULT_DB, account_size=account_size), cfg)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    db, aliases = _open_db(args)
+    tools = _open_tools(args)
     try:
-        return args.fn(db, args, aliases)
-    except (ParseError, ValueError, KeyError) as e:
+        return args.fn(tools.db, args, tools)
+    except (ParseError, ValueError, KeyError, sqlite3.IntegrityError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
     finally:
-        db.close()
+        tools.db.close()
 
 
 if __name__ == "__main__":
