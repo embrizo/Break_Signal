@@ -61,6 +61,15 @@ class AiCfg(BaseModel):
     api_key: str = ""                # empty → ANTHROPIC_API_KEY from the environment
 
 
+class WebhookCfg(BaseModel):
+    """TradingView alert webhook → journal signals (source='pine')."""
+    enabled: bool = False
+    host: str = "0.0.0.0"
+    port: int = 8787
+    secret: str = ""          # required when enabled; goes in the URL path: /pine/<secret>
+    notify: bool = False      # also push each new pine alert through the Telegram/Discord notifiers
+
+
 class Config(BaseModel):
     exchange: str = "okx"
     watches: list[Watch]
@@ -74,6 +83,7 @@ class Config(BaseModel):
     journal: JournalCfg = Field(default_factory=JournalCfg)
     telegram_bot: TelegramBotCfg = Field(default_factory=TelegramBotCfg)
     ai: AiCfg = Field(default_factory=AiCfg)
+    webhook: WebhookCfg = Field(default_factory=WebhookCfg)
 
     def to_params(self) -> Params:
         # Only pass keys Params knows about, so extra yaml keys don't crash startup.

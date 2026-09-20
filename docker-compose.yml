@@ -26,7 +26,10 @@ services:
       # Regional OKX hosts if the defaults are geo-blocked where the Pi lives.
       - OKX_REST_URL=${OKX_REST_URL:-https://www.okx.com}
       - OKX_WS_URL=${OKX_WS_URL:-wss://ws.okx.com:8443/ws/v5/business}
-    # No ports exposed — this is an outbound-only worker.
+    # Outbound-only unless you enable the TradingView webhook receiver; then
+    # publish its port (and route it in from the internet).
+    # ports:
+    #   - "8787:8787"
     logging:
       driver: json-file
       options:

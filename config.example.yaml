@@ -74,6 +74,16 @@ telegram_bot:
   allowed_chat_ids: []        # e.g. ["123456789"]; empty = nobody can use commands
   poll_timeout: 30
 
+# ── TradingView webhook: the Pine indicator's alert() JSON → journal signals (source=pine) ──
+# In TradingView: alert → Webhook URL = http://<pi>:8787/pine/<secret>. Needs a route in from
+# the internet (port-forward / tunnel); the secret in the path is the only auth.
+webhook:
+  enabled: false
+  host: 0.0.0.0
+  port: 8787
+  secret: ""                  # long random string; required when enabled
+  notify: false               # also push pine alerts (with the journal footer) to Telegram/Discord
+
 # ── AI coach (Telegram /ask and /review, weekly report). Needs the anthropic package. ──
 ai:
   enabled: false
