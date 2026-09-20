@@ -243,6 +243,49 @@ def tag_stats(trades: list[Trade], phase: str | None = None) -> dict[str, dict]:
     return group_stats(trades, key)
 
 
+def direction_for_event(event: str) -> str:
+    """A break_up is traded LONG, a break_down SHORT."""
+    return "LONG" if event == "break_up" else "SHORT"
+
+
+def signal_history(trades: list[Trade], tf: str, event: str, side: str,
+                   symbol: str | None = None, min_tag_n: int = 2) -> dict:
+    """CALC: how the trader has done on setups like this alert.
+
+    Matches CLOSED trades with the same timeframe and the direction implied by
+    ``event``. Signal-linked trades must also match ``side``; discretionary
+    trades (no signal) are kept — they are the same setup logged by hand.
+    ``symbol`` narrows to one instrument when given. Best/worst entry tag are
+    reported only with at least ``min_tag_n`` trades behind them.
+    """
+    direction = direction_for_event(event)
+    tf_u = tf.upper()
+    matched = [
+        t for t in closed(trades)
+        if t.direction == direction
+        and (t.tf or "").upper() == tf_u
+        and (symbol is None or t.symbol == symbol)
+        and (t.signal is None or t.signal.side == side)
+    ]
+    s = summarize(matched)
+    tags = {k: v for k, v in tag_stats(matched, "ENTRY").items() if v["n"] >= min_tag_n}
+    best = worst = None
+    if tags:
+        ranked = sorted(tags.items(), key=lambda kv: (kv[1]["avg_r"], kv[1]["n"]))
+        worst = {"tag": ranked[0][0], "avg_r": ranked[0][1]["avg_r"], "n": ranked[0][1]["n"]}
+        best = {"tag": ranked[-1][0], "avg_r": ranked[-1][1]["avg_r"], "n": ranked[-1][1]["n"]}
+        if best["tag"] == worst["tag"]:
+            worst = None
+    return {
+        "label": f"{tf_u} {side} breaks ({direction})" + (f" on {symbol}" if symbol else ""),
+        "tf": tf_u, "side": side, "direction": direction, "symbol": symbol,
+        "n": s["n"], "wins": s["wins"], "losses": s["losses"], "be": s["be"],
+        "win_rate": s["win_rate"], "avg_r": s["avg_r"], "profit_factor": s["profit_factor"],
+        "best_tag": best, "worst_tag": worst,
+        "trade_ids": [t.id for t in matched],
+    }
+
+
 def feature_stats(trades: list[Trade]) -> dict[str, dict[str, dict]]:
     """Performance by timeframe, direction, session, RSI band, ATR-distance band,
     and — for signal-linked trades — signal side / event."""

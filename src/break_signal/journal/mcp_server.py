@@ -112,6 +112,15 @@ def journal_feature_stats(period: str = "all") -> dict:
 
 
 @mcp.tool()
+def journal_signal_history(tf: str, event: str, side: str | None = None,
+                           symbol: str | None = None, period: str | None = None) -> dict:
+    """CALC: the trader's record on this kind of alert — tf + event (break_up → LONG,
+    break_down → SHORT) [+ side, symbol] — n, win_rate, avg_r, PF, best/worst entry tag,
+    matched trade ids. Use for 'how do my 4H breaks compare to 1D breaks?'."""
+    return T.signal_history(tf, event, side, symbol, period)
+
+
+@mcp.tool()
 def journal_equity_curve(period: str = "all") -> list[dict]:
     """CALC: cumulative R after each closed trade, oldest first."""
     return T.equity_curve(period)

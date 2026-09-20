@@ -193,6 +193,15 @@ class Tools:
         """CALC: performance by tf, direction, session, RSI band, ATR band, signal side/event."""
         return _json({"period": period, **analytics.feature_stats(self._trades(period))})
 
+    def signal_history(self, tf: str, event: str, side: str | None = None,
+                       symbol: str | None = None, period: str | None = None) -> dict:
+        """CALC: how the trader has done on this kind of alert (tf + break direction),
+        with best/worst entry tag. This is what the alert footer shows."""
+        if side is None:
+            side = "resistance" if event == "break_up" else "support"
+        return _json(analytics.signal_history(self._trades(period), tf=tf, event=event, side=side,
+                                              symbol=self._sym(symbol) if symbol else None))
+
     def equity_curve(self, period: str = "all") -> list[dict]:
         """CALC: cumulative R after each closed trade."""
         return _json(analytics.equity_curve(self._trades(period)))

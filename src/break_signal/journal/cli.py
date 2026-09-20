@@ -68,7 +68,7 @@ def _summary_block(title: str, s: dict) -> str:
     return (
         f"{title}\n"
         f"  n={s['n']}  W/L/BE={s['wins']}/{s['losses']}/{s['be']}  win_rate={_pct(s['win_rate'])}\n"
-        f"  avg_R={_f(s['avg_r'])}  total_R={_f(s['total_r'])}  PF={_f(pf) if isinstance(pf, float) else pf}"
+        f"  avg_R={_f(s['avg_r'])}  total_R={_f(s['total_r'])}  PF={_f(pf)}"
         f"  avg_win={_f(s['avg_win_r'])}R  avg_loss={_f(s['avg_loss_r'])}R  max_DD={_f(s['max_drawdown_r'])}R\n"
         f"  streaks: max_win={st['max_win']} max_loss={st['max_loss']} "
         f"current={st['current']} {st['current_kind'] or ''}"
@@ -78,7 +78,7 @@ def _summary_block(title: str, s: dict) -> str:
 
 def _group_table(groups: dict[str, dict]) -> str:
     rows = [[k, v["n"], f"{v['wins']}/{v['losses']}/{v['be']}", _pct(v["win_rate"]),
-             _f(v["avg_r"]), _f(v["profit_factor"]) if isinstance(v["profit_factor"], float) else str(v["profit_factor"])]
+             _f(v["avg_r"]), _f(v["profit_factor"])]
             for k, v in groups.items()]
     return _table(rows, ["bucket", "n", "W/L/BE", "win%", "avg_R", "PF"])
 
@@ -209,6 +209,51 @@ def cmd_signals(db: JournalDB, args, aliases) -> int:
             for s in sigs]
     print(_table(rows, ["id", "src", "symbol", "tf", "event", "side", "price", "line",
                         "touch", "rsi", "vol", "candle (UTC)"]))
+    return 0
+
+
+def import_signals_csv(db: JournalDB, path: str, source: str = "backtest",
+                       symbol: str | None = None) -> tuple[int, int]:
+    """Load a replay CSV (columns as ``Signal.to_dict()``) into ``signals``.
+    Rows lack ``line_id``, so one is synthesised from side + line price.
+    Returns (inserted, rows); idempotent on re-import."""
+    before = db.conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0]
+    n = 0
+    with open(path, newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            n += 1
+            d = {k: (v if v != "" else None) for k, v in row.items()}
+            for k in ("price", "line", "atr_dist", "vol_ratio", "rsi"):
+                if d.get(k) is not None:
+                    d[k] = float(d[k])
+            for k in ("touches", "age_bars"):
+                if d.get(k) is not None:
+                    d[k] = int(float(d[k]))
+            if symbol:
+                d["symbol"] = symbol
+            d.setdefault("exchange", "OKX")
+            d["line_id"] = d.get("line_id") or f"csv:{d['side']}:{d['line']:.6g}"
+            db.insert_signal(d, source=source)
+    after = db.conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0]
+    return after - before, n
+
+
+def cmd_import_signals(db: JournalDB, args, aliases) -> int:
+    inserted, n = import_signals_csv(db, args.csv, source=args.source, symbol=args.symbol)
+    print(f"imported {inserted} new of {n} rows from {args.csv} (source={args.source})")
+    return 0
+
+
+def cmd_footer(db: JournalDB, args, aliases) -> int:
+    """Preview the alert footer for a stored signal."""
+    from .footer import alert_footer
+    sig = db.get_signal(args.signal_id)
+    if sig is None:
+        print(f"no signal #{args.signal_id}", file=sys.stderr)
+        return 1
+    d = sig.to_dict()
+    d["line"] = d["line_price"]
+    print(alert_footer(db, d, sig.id))
     return 0
 
 
@@ -351,6 +396,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--symbol"); p.add_argument("--tf"); p.add_argument("--source")
     p.add_argument("--limit", type=int, default=30)
     p.set_defaults(fn=cmd_signals)
+
+    p = sub.add_parser("import-signals", help="load a replay CSV into the signals table")
+    p.add_argument("csv")
+    p.add_argument("--source", default="backtest", choices=["backtest", "live", "pine"])
+    p.add_argument("--symbol", help="override the symbol column (e.g. SOL-USDT-SWAP)")
+    p.set_defaults(fn=cmd_import_signals)
+
+    p = sub.add_parser("footer", help="preview the alert history footer for a signal id")
+    p.add_argument("signal_id", type=int)
+    p.set_defaults(fn=cmd_footer)
 
     p = sub.add_parser("stats", help="deterministic performance numbers")
     _add_filters(p, with_limit=False)

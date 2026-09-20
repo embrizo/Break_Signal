@@ -9,6 +9,7 @@ import sys
 
 from .config import load_config
 from .core.state import State
+from .journal.db import JournalDB
 from .notify.base import Notifier
 from .notify.discord import DiscordNotifier
 from .notify.telegram import TelegramNotifier
@@ -41,12 +42,15 @@ async def run(config_path: str) -> None:
         log.info("Notifiers: %s", ", ".join(n.name for n in notifiers))
 
     state = State(cfg.state_db)
-    watchers = [Watcher(cfg, w, state, notifiers) for w in cfg.watches]
+    journal = JournalDB(cfg.journal.db, account_size=cfg.journal.account_size)
+    log.info("Journal: %s", cfg.journal.db)
+    watchers = [Watcher(cfg, w, state, notifiers, journal) for w in cfg.watches]
     log.info("Starting %d watcher(s)", len(watchers))
     try:
         await asyncio.gather(*(w.run() for w in watchers))
     finally:
         state.close()
+        journal.close()
 
 
 def main() -> None:

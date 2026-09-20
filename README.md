@@ -58,7 +58,10 @@ python -m break_signal.backtest.replay --symbol SOL-USDT-SWAP --tf 1D --limit 50
 ```
 
 Walks a growing window so each bar sees only past data — no look-ahead, same
-pivot-confirmation lag as live.
+pivot-confirmation lag as live. Add `--to-journal` to also store the signals in
+`data/journal.db` (source `backtest`) so the journal has history before your first
+trade; `python -m break_signal.journal import-signals signals.csv` does the same
+for an existing CSV.
 
 ## Trade journal
 
@@ -83,6 +86,18 @@ Quote the whole line (PowerShell eats bare `--` and splits on commas otherwise).
 R-multiple, PnL and every statistic are computed by `journal/analytics.py`; you
 never type them. Anything you don't say is stored as NULL, not guessed. Tags are
 free-form (Thai works) and unknown ones are created on the fly.
+
+Every alert the watcher sends is also stored as a signal, and trades link to it
+(`add ... --signal 12`, or automatically when logged within 3 bars of a matching
+alert). Once you have ≥3 closed trades on a setup, alerts gain a footer:
+
+```
+📒 Your history on 4H resistance breaks (LONG): 7 trades · 57% win · +0.8R avg
+   Best tag: Retest (+1.4R, n=4)  Worst tag: FOMO (-1.0R, n=3)
+   Log: journal add "SOL-USDT-SWAP 4H long <entry> sl <sl> tp <tp>" --signal 118, or skip 118 <reason>
+```
+
+`journal footer <signal_id>` previews it; `journal.history_footer: false` turns it off.
 
 ### AI coach in Claude Code
 

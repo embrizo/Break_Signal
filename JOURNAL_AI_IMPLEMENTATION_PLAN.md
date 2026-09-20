@@ -6,7 +6,7 @@ the system fires a breakout → you take (or skip) the trade → you log the res
 "should I take this?", answers with price-action suggestions grounded in **your own
 trades**, not generic advice.
 
-**Status:** J0 + J1 code done (2026-09-20) → J1 chat smoke test, then J2
+**Status:** J0 + J1 + J2 done (2026-09-20) → J1 chat smoke test, then J3
 **Date:** 2026-09-20
 **Source docs:** `IMPLEMENTATION_PLAN.md` (Break Signal, Phases 1–2 built),
 `trading_journal_implementation_plan_AI_extended.md` (journal + AI concept, analysed in §1)
@@ -462,15 +462,23 @@ golden analytics test pins the exact numbers. ✔
 **Done when:** in this chat, "should I take this SOL break?" produces the §3.3 answer
 with real numbers from your journal and a live OKX snapshot. (Journal half ✔; live snapshot blocked by network.)
 
-### Phase J2 — Signal ↔ trade linkage + alert enrichment (1 day)
+### Phase J2 — Signal ↔ trade linkage + alert enrichment (1 day) — DONE 2026-09-20
 
 ```
-[ ] watcher.py: after log_alert(), also journal.db.insert_signal(sig, source='live') → signal_id
-[ ] backtest/replay.py: --to-journal flag writes signals with source='backtest' (gives the AI history day 1)
-[ ] Import signals_sol_1d_binance.csv (10 rows already produced) as the first backtest batch
-[ ] notify/base.format_message(): append analytics.signal_history(sig) footer (§3.4) when journal has ≥3 matching trades
-[ ] tools.journal_add_trade auto-links signal_id when symbol/tf/direction match an alert within the last 3 bars
-[ ] tests: signal insert + footer formatting
+[x] watcher.py: Watcher(..., journal=JournalDB) — insert_signal(sig, 'live') BEFORE dispatch so the alert
+      can carry the signal id; failures never block the alert. __main__ opens journal.db and passes it in.
+[x] backtest/replay.py: replay_signals() returns Signal objects (with line_id); --to-journal [DB] writes
+      them with source='backtest', idempotent
+[x] journal import-signals <csv> [--symbol X]: loads a replay CSV (line_id synthesised as csv:<side>:<line>).
+      signals_sol_1d_binance.csv imported into data/journal.db (10 rows, ids 1–10)
+[x] analytics.signal_history(): same tf + implied direction; signal-linked trades must match side;
+      discretionary trades count; best/worst entry tag need n ≥ 2. Exposed as MCP tool journal_signal_history.
+[x] journal/footer.py: alert_footer() — stats block when n ≥ 3, else "0 closed trade(s) … stats shown from 3";
+      always the log/skip hint with the signal id. notify/base.format_message(sig, footer=None) — notify
+      stays independent of journal. Config journal.history_footer toggles it (signals are stored regardless).
+[x] tools.add_trade auto-link (done in J1)
+[x] journal footer <signal_id>: CLI preview
+[x] tests/test_signal_linkage.py (7 tests; 128 total pass)
 ```
 
 ### Phase J3 — Telegram bot + Claude API coach (2 days)
@@ -683,6 +691,7 @@ never imports `journal`.
 
 ## 11. Next action
 
-J0 and J1 code are done. Next: (1) restart Claude Code in this repo so `.mcp.json` loads and
-try "what's my win rate on 4H breaks?"; (2) **J2** — persist watcher signals to `journal.db`,
-`replay.py --to-journal`, import `signals_sol_1d_binance.csv`, alert history footer.
+J0–J2 are done. Next: (1) restart Claude Code in this repo so `.mcp.json` loads and try
+"what's my win rate on 4H breaks?"; (2) **J3** — Telegram command bot (`/trade /close /skip
+/ask …`) + `coach.py` (Anthropic SDK tool runner over the read-only tools). Needs
+`pip install anthropic` and an `ANTHROPIC_API_KEY`; the bot part needs the Telegram token.

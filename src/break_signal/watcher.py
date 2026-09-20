@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 import aiohttp
 import numpy as np
@@ -15,16 +16,23 @@ from .data import okx_rest
 from .data.okx_ws import ClosedCandle, stream_closed_candles
 from .notify.base import Notifier, format_message
 
+if TYPE_CHECKING:
+    from .journal.db import JournalDB
+
 log = logging.getLogger(__name__)
 
 
 class Watcher:
-    def __init__(self, cfg: Config, watch: Watch, state: State, notifiers: list[Notifier]):
+    def __init__(self, cfg: Config, watch: Watch, state: State, notifiers: list[Notifier],
+                 journal: "JournalDB | None" = None):
         self.cfg = cfg
         self.symbol = watch.symbol
         self.tf = watch.timeframe
         self.state = state
         self.notifiers = notifiers
+        # Optional trade journal: every alert becomes a `signals` row a trade can
+        # link to, and alerts gain a "your history on this setup" footer.
+        self.journal = journal
         self.engine = Engine(
             params=cfg.to_params(),
             tf_seconds=bar_seconds(self.tf),
@@ -94,16 +102,37 @@ class Watcher:
         for sig in res.signals:
             if self.state.is_broken(self.symbol, self.tf, sig.line_id):
                 continue
-            await self._dispatch(sig, res.lines)
+            signal_id = self._journal_signal(sig, last_ts)
+            await self._dispatch(sig, res.lines, signal_id)
             self.state.mark_broken(self.symbol, self.tf, sig.line_id)
             self.state.log_alert(
                 self.symbol, self.tf, sig.line_id, sig.event, sig.price, int(self.candles.ts[-1])
             )
         self.state.set_last_candle_ts(self.symbol, self.tf, last_ts)
 
-    async def _dispatch(self, sig: Signal, lines) -> None:
+    def _journal_signal(self, sig: Signal, candle_ts: int) -> int | None:
+        """Persist the alert to the journal (idempotent). Never blocks the alert."""
+        if self.journal is None:
+            return None
+        try:
+            return self.journal.insert_signal(sig, source="live", candle_ts=candle_ts)
+        except Exception:  # noqa: BLE001
+            log.exception("journal insert_signal failed")
+            return None
+
+    def _footer(self, sig: Signal, signal_id: int | None) -> str | None:
+        if self.journal is None or not self.cfg.journal.history_footer:
+            return None
+        try:
+            from .journal.footer import alert_footer
+            return alert_footer(self.journal, sig, signal_id)
+        except Exception:  # noqa: BLE001
+            log.exception("journal footer failed; sending alert without it")
+            return None
+
+    async def _dispatch(self, sig: Signal, lines, signal_id: int | None = None) -> None:
         log.info("BREAK %s %s %s @ %.4g", self.symbol, self.tf, sig.event, sig.price)
-        text = format_message(sig)
+        text = format_message(sig, self._footer(sig, signal_id))
         image = None
         if self.cfg.render_chart:
             try:

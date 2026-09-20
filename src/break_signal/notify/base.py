@@ -16,9 +16,11 @@ class Notifier(Protocol):
 _ARROW = {"break_up": "🔴 ↑ RESISTANCE BREAK", "break_down": "🟢 ↓ SUPPORT BREAK"}
 
 
-def format_message(sig: Signal) -> str:
+def format_message(sig: Signal, footer: str | None = None) -> str:
+    """Alert text. ``footer`` (e.g. the journal history block) is appended
+    verbatim after a blank line so this module stays independent of the journal."""
     head = _ARROW.get(sig.event, sig.event)
-    return (
+    body = (
         f"{head}\n"
         f"{sig.symbol} · {sig.tf} · {sig.exchange}\n\n"
         f"Price   {sig.price:.4g}\n"
@@ -28,3 +30,4 @@ def format_message(sig: Signal) -> str:
         f"RSI     {sig.rsi:.1f}\n"
         f"Time    {sig.time}"
     )
+    return body + ("\n\n" + footer if footer else "")
