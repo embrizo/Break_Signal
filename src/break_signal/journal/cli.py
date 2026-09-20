@@ -109,6 +109,8 @@ def cmd_close(db: JournalDB, args, tools: Tools) -> int:
     t = out["trade"]
     print(f"closed trade #{t['id']}: {t['outcome']} R={_f(t['r_multiple'])} pnl={_f(t['pnl_amount'])} "
           f"exit_tags={t['exit_tags']}")
+    if out.get("outcome_note"):
+        print(f"  ⚠ {out['outcome_note']}")
     _print_violations(out["rule_violations"])
     return 0
 
@@ -275,11 +277,11 @@ def _coach(tools: Tools):
 
 def cmd_ask(db: JournalDB, args, tools: Tools) -> int:
     import asyncio
-    from .coach import AskBudgetExceeded
+    from .coach import AskBudgetExceeded, CoachError
     coach = _coach(tools)
     try:
         ans = asyncio.run(coach.ask(" ".join(args.question), store=not args.no_store))
-    except AskBudgetExceeded as e:
+    except (AskBudgetExceeded, CoachError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
     print(ans.text)
@@ -292,8 +294,12 @@ def cmd_ask(db: JournalDB, args, tools: Tools) -> int:
 
 def cmd_review(db: JournalDB, args, tools: Tools) -> int:
     import asyncio
-    from .coach import format_review
-    r = asyncio.run(_coach(tools).review(args.trade_id, store=not args.no_store))
+    from .coach import CoachError, format_review
+    try:
+        r = asyncio.run(_coach(tools).review(args.trade_id, store=not args.no_store))
+    except CoachError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     print(json.dumps(r, ensure_ascii=False, indent=2) if args.json else format_review(r))
     return 0 if "error" not in r else 1
 

@@ -153,6 +153,19 @@ def test_daily_budget(tools):
     assert coach.asks_today() == 2
 
 
+def test_missing_credentials_is_a_clean_error(tools, monkeypatch):
+    """Real SDK client, no key → CoachError with a hint, never a raw TypeError traceback.
+    ANTHROPIC_BASE_URL points at a closed port so a dev box with an `ant auth` profile
+    fails fast on connection instead of spending money."""
+    for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")
+    coach = C.Coach(tools, AiCfg())
+    with pytest.raises(C.CoachError) as ei:
+        asyncio.run(coach.ask("hi", store=False))
+    assert "ANTHROPIC_API_KEY" in str(ei.value) or "cannot reach" in str(ei.value)
+
+
 # ── /review ──────────────────────────────────────────────────────────────────
 def test_review_structured_and_stored(tools):
     fake = FakeClient(review={"facts": ["LONG SOL 4H, exit 120 (#1)"], "metrics": ["R 2.0", "same setup n=2"],

@@ -45,6 +45,26 @@ class AskBudgetExceeded(RuntimeError):
     pass
 
 
+class CoachError(RuntimeError):
+    """The model could not be reached (credentials, network, API error).
+    Message is safe to show to the trader."""
+
+
+def _friendly(e: Exception) -> CoachError:
+    import anthropic
+    if isinstance(e, TypeError) and "authentication" in str(e).lower():
+        return CoachError("no Anthropic credentials — set ANTHROPIC_API_KEY (or ai.api_key in config.yaml)")
+    if isinstance(e, anthropic.AuthenticationError):
+        return CoachError("Anthropic API key rejected (401) — check ANTHROPIC_API_KEY / ai.api_key")
+    if isinstance(e, anthropic.RateLimitError):
+        return CoachError("Anthropic rate limit hit (429) — try again in a minute")
+    if isinstance(e, anthropic.APIConnectionError):
+        return CoachError(f"cannot reach the Anthropic API: {e}")
+    if isinstance(e, anthropic.APIStatusError):
+        return CoachError(f"Anthropic API error {e.status_code}: {e.message}")
+    return CoachError(f"coach failed: {e.__class__.__name__}: {e}")
+
+
 # ── number-parity guard (deterministic, no LLM) ─────────────────────────────
 _NUM_RE = re.compile(r"(?<![\w#])[-+]?\d+(?:[.,]\d+)?%?")
 
@@ -298,16 +318,21 @@ class Coach:
         self._calls = []
         user = question if signal is None else \
             f"{question}\n\nCURRENT SIGNAL:\n{json.dumps(signal, ensure_ascii=False)}"
-        runner = self.client.beta.messages.tool_runner(
-            model=self.cfg.model,
-            max_tokens=self.cfg.max_tokens,
-            max_iterations=self.cfg.max_tool_calls,
-            thinking={"type": "adaptive"},
-            system=[{"type": "text", "text": prompts.COACH_V1, "cache_control": {"type": "ephemeral"}}],
-            tools=self.build_tools(),
-            messages=[{"role": "user", "content": user}],
-        )
-        final = await runner.until_done()
+        try:
+            runner = self.client.beta.messages.tool_runner(
+                model=self.cfg.model,
+                max_tokens=self.cfg.max_tokens,
+                max_iterations=self.cfg.max_tool_calls,
+                thinking={"type": "adaptive"},
+                system=[{"type": "text", "text": prompts.COACH_V1, "cache_control": {"type": "ephemeral"}}],
+                tools=self.build_tools(),
+                messages=[{"role": "user", "content": user}],
+            )
+            final = await runner.until_done()
+        except (AskBudgetExceeded, CoachError):
+            raise
+        except Exception as e:  # noqa: BLE001 — SDK/network errors become one readable message
+            raise _friendly(e) from e
         text = "".join(b.text for b in final.content if b.type == "text").strip()
         usage = _usage(final)
         ans = CoachAnswer(text=text, tool_calls=list(self._calls), model=self.cfg.model,
@@ -338,14 +363,17 @@ class Coach:
         ctx = self.tools.review_context(trade_id)
         if "error" in ctx:
             return ctx
-        resp = await self.client.messages.parse(
-            model=self.cfg.model,
-            max_tokens=self.cfg.max_tokens,
-            thinking={"type": "adaptive"},
-            system=[{"type": "text", "text": prompts.REVIEW_V1, "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content": "REVIEW CONTEXT (JSON):\n" + json.dumps(ctx, ensure_ascii=False)}],
-            output_format=Review,
-        )
+        try:
+            resp = await self.client.messages.parse(
+                model=self.cfg.model,
+                max_tokens=self.cfg.max_tokens,
+                thinking={"type": "adaptive"},
+                system=[{"type": "text", "text": prompts.REVIEW_V1, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": "REVIEW CONTEXT (JSON):\n" + json.dumps(ctx, ensure_ascii=False)}],
+                output_format=Review,
+            )
+        except Exception as e:  # noqa: BLE001
+            raise _friendly(e) from e
         parsed = resp.parsed_output
         out = parsed.model_dump() if parsed is not None else {"error": "no structured output"}
         out["trade_id"] = trade_id

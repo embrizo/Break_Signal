@@ -346,7 +346,13 @@ class Tools:
                                 exit_tags=tags, fees=fees, emotion_after=emotion_after)
         check = rules.check(self.db, t)
         rules.record_violations(self.db, t.id, check)
-        return _json({"trade": trade_dict(t), "rule_violations": check["violations"]})
+        out = {"trade": trade_dict(t), "rule_violations": check["violations"]}
+        derived = analytics.derive_outcome(t.r_multiple)
+        if outcome and derived and t.outcome != derived:
+            # The stated outcome wins (partials etc.), but a contradiction is worth a look.
+            out["outcome_note"] = (f"declared {t.outcome} but R is {t.r_multiple:+.2f} (derived {derived}); "
+                                   f"stats count it as {t.outcome}")
+        return _json(out)
 
     def close_trade_line(self, text: str) -> dict:
         """WRITE: close from ``<id> <exit> [win|loss|be] [#tags] [reason]``."""

@@ -93,6 +93,17 @@ def test_line_variants_and_close(tools):
     assert _roundtrip(full)["closed"] is not None
 
 
+def test_close_outcome_conflict_is_flagged(tools):
+    tid = tools.add_trade("SOL", "SHORT", entry_price=63.6, sl_price=67.5, auto_link=False)["trade"]["id"]
+    out = tools.close_trade(tid, 60, outcome="loss")          # +0.92R declared a loss
+    assert out["trade"]["outcome"] == "LOSS"
+    assert "declared LOSS but R is +0.92" in out["outcome_note"]
+    tid2 = tools.add_trade("SOL", "LONG", entry_price=100, sl_price=90, auto_link=False)["trade"]["id"]
+    assert "outcome_note" not in tools.close_trade(tid2, 120, outcome="win")   # agrees → no note
+    tid3 = tools.add_trade("SOL", "LONG", entry_price=100, sl_price=90, auto_link=False)["trade"]["id"]
+    assert "outcome_note" not in tools.close_trade(tid3, 120)                  # derived → no note
+
+
 def test_rule_violations_recorded_on_write(tools):
     out = tools.add_trade("SOL", "LONG", entry_price=100, sl_price=90, tp_price=101, risk_pct=3,
                           tags=["FOMO"])

@@ -171,8 +171,9 @@ class TelegramBot:
             return "usage: /close <id> <exit> [win|loss|be] [#tags] [reason]"
         out = self.tools.close_trade_line(rest)
         t = out["trade"]
+        note = f"\n⚠ {out['outcome_note']}" if out.get("outcome_note") else ""
         return (f"closed #{t['id']}: {t['outcome']} R={_f(t['r_multiple'])} pnl={_f(t['pnl_amount'])}"
-                f"{_violations(out['rule_violations'])}")
+                f"{note}{_violations(out['rule_violations'])}")
 
     def _cmd_skip(self, rest: str) -> str:
         sid, _, reason = rest.partition(" ")
@@ -281,11 +282,11 @@ class TelegramBot:
             return "AI coach is off (ai.enabled: false or ANTHROPIC_API_KEY missing)"
         if not rest:
             return "usage: /ask <question>"
-        from ..journal.coach import AskBudgetExceeded
+        from ..journal.coach import AskBudgetExceeded, CoachError
         try:
             ans = await self.coach.ask(rest)
-        except AskBudgetExceeded as e:
-            return str(e)
+        except (AskBudgetExceeded, CoachError) as e:
+            return f"coach: {e}"
         note = f"\n\n⚠ numbers not found in tool results: {', '.join(ans.unverified_numbers)}" \
             if ans.unverified_numbers else ""
         calls = f"\n\n[{len(ans.tool_calls)} tool calls · {ans.model} · {ans.prompt_version}]"
@@ -296,5 +297,8 @@ class TelegramBot:
             return "AI coach is off (ai.enabled: false or ANTHROPIC_API_KEY missing)"
         if not rest.isdigit():
             return "usage: /review <trade_id>"
-        from ..journal.coach import format_review
-        return format_review(await self.coach.review(int(rest)))
+        from ..journal.coach import CoachError, format_review
+        try:
+            return format_review(await self.coach.review(int(rest)))
+        except CoachError as e:
+            return f"coach: {e}"
