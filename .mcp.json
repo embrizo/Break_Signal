@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "journal": {
+      "command": "python",
+      "args": ["-m", "break_signal.journal.mcp_server"],
+      "env": {
+        "PYTHONPATH": "src",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    }
+  }
+}

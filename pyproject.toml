@@ -20,9 +20,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9"]
+ai = ["mcp>=1.2", "anthropic>=0.40"]   # journal MCP server (Claude Code) + Telegram /ask coach
 
 [project.scripts]
 break-signal = "break_signal.__main__:main"
+break-signal-journal = "break_signal.journal.cli:main"
+break-signal-journal-mcp = "break_signal.journal.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

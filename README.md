@@ -84,6 +84,21 @@ R-multiple, PnL and every statistic are computed by `journal/analytics.py`; you
 never type them. Anything you don't say is stored as NULL, not guessed. Tags are
 free-form (Thai works) and unknown ones are created on the fly.
 
+### AI coach in Claude Code
+
+`.mcp.json` registers a `journal` MCP server (`pip install -e .[ai]` for the `mcp`
+package). Open Claude Code in this repo and talk to it:
+
+> "took the SOL 4H break, long 231.5, sl 225, tp 245, breakout + retest, felt calm"
+> "closed 12 at 244, hit TP, held the plan"
+> "SOL just broke the 1D resistance at 236, RSI 68 — what does my history say?"
+
+Claude reads `CLAUDE.md` for the coach rules: every number comes from a tool
+result with its sample size, past trades are cited by id, suggestions are
+conditional price-action to watch — never "buy" or "sell" — and it asks before
+writing to the journal. `market_snapshot` needs OKX reachable (`OKX_REST_URL`
+env to switch host if geo-blocked).
+
 ## Tests
 
 ```bash
@@ -115,7 +130,7 @@ src/break_signal/
   notify/      telegram, discord
   render/      mplfinance chart snapshot
   backtest/    offline replay -> CSV
-  journal/     trade journal: db, parser, analytics, cli
+  journal/     trade journal: db, parser, analytics, rules, similar, tools, mcp_server, cli
   watcher.py   one (symbol, timeframe) worker
   __main__.py  entrypoint
 tests/         algorithm tests on synthetic data

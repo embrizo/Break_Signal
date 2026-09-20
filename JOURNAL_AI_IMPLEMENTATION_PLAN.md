@@ -6,7 +6,7 @@ the system fires a breakout → you take (or skip) the trade → you log the res
 "should I take this?", answers with price-action suggestions grounded in **your own
 trades**, not generic advice.
 
-**Status:** J0 done (2026-09-20) → next J1
+**Status:** J0 + J1 code done (2026-09-20) → J1 chat smoke test, then J2
 **Date:** 2026-09-20
 **Source docs:** `IMPLEMENTATION_PLAN.md` (Break Signal, Phases 1–2 built),
 `trading_journal_implementation_plan_AI_extended.md` (journal + AI concept, analysed in §1)
@@ -435,27 +435,32 @@ Implementation notes (J0):
 **Done when:** you can log, close, and see `stats` + `tag_stats` from the CLI, and the
 golden analytics test pins the exact numbers. ✔
 
-### Phase J1 — AI Coach in Claude Code (this chat) (2 days)  ← the requested feature
+### Phase J1 — AI Coach in Claude Code (this chat) (2 days) — CODE DONE 2026-09-20, chat smoke pending
 
 ```
-[ ] journal/tools.py — shared functions, all returning JSON-safe dicts:
-      journal_add_trade, journal_close_trade, journal_skip_signal, journal_add_event,
-      journal_add_tag, journal_search_trades(filters), journal_get_trade(id),
-      journal_tag_stats, journal_stats(period), journal_recent_signals,
-      journal_similar_trades(features), journal_rule_check(proposed), journal_review_context(id),
-      market_snapshot(symbol, tf) → runs Engine on fresh OKX candles: lines, ATR, RSI, distances, last-bar signal
-[ ] journal/similar.py — score = tag Jaccard×3 + same side/event×2 + same tf×1 + rsi within ±8×1 + atr_dist band×1;
-      return top-k with outcome, r, entry_reason, exit_reason
-[ ] journal/mcp_server.py — FastMCP over stdio exposing tools.py; every tool docstring states FACT vs CALC
-[ ] .mcp.json — {"mcpServers":{"journal":{"command":"python","args":["-m","break_signal.journal.mcp_server"],"cwd":"."}}}
-[ ] CLAUDE.md — coach rules (§6.3): answer shape FACTS → YOUR HISTORY → INTERPRETATION → YOUR DECISION,
-      always cite trade ids + sample size, never invent numbers, never say buy/sell, ask before writing
-[ ] tests/test_tools.py — tool functions on a fixture DB; test_similar.py
-[ ] Smoke: open Claude Code in this repo, ask "what's my win rate on 4H breaks?" and watch it call the tools
+[x] journal/tools.py — `Tools` class, every method returns JSON-safe dicts (numpy/NaN scrubbed):
+      add_trade (+ auto-link to a matching alert ≤3 bars old, copies its RSI/ATR ctx), add_trade_line,
+      close_trade, close_trade_line, skip_signal, add_event, add_tag, tag_trade, add_screenshot, update_trade,
+      search_trades, get_trade (+ stored violations), recent_signals, list_tags, list_rules,
+      stats, tag_stats, feature_stats, equity_curve, similar_trades, rule_check, review_context,
+      market_snapshot (async; snapshot_from_candles() is the pure, tested part)
+[x] journal/similar.py — score = tag Jaccard×3 + same side/event×2 + same symbol×2 + same tf×1 + rsi ±8×1
+      + atr_dist band×1; direction is a hard filter; ties by recency; per-match breakdown returned
+[x] journal/rules.py — pulled forward from J4: operators (§4.3), trade_facts(), seed rules, check/record;
+      violations are evaluated + stored on every add/close/event. (J4 keeps: surfacing in alert footer/Telegram.)
+[x] journal/mcp_server.py — FastMCP stdio, 23 tools, docstrings state FACT / CALC / WRITE; stderr logging only
+[x] .mcp.json — python -m break_signal.journal.mcp_server with PYTHONPATH=src; DB from $JOURNAL_DB / config.yaml
+[x] CLAUDE.md — coach rules + answer shape + logging examples + codebase rules
+[x] tests: test_tools.py, test_similar.py, test_rules.py (40 new; 121 total pass)
+[x] Smoke: drove the server over stdio with the MCP Python client — all tools round-trip
+[ ] Smoke in Claude Code: open a NEW session in this repo (so .mcp.json is picked up), ask
+      "what's my win rate on 4H breaks?" and watch it call journal_stats
+[ ] market_snapshot live: OKX hosts are DNS-blocked on this machine (ISP). Verified only on synthetic candles.
+      Options: OKX_REST_URL=https://aws.okx.com in .mcp.json env (also blocked here), VPN, or run on the Pi.
 ```
 
 **Done when:** in this chat, "should I take this SOL break?" produces the §3.3 answer
-with real numbers from your journal and a live OKX snapshot.
+with real numbers from your journal and a live OKX snapshot. (Journal half ✔; live snapshot blocked by network.)
 
 ### Phase J2 — Signal ↔ trade linkage + alert enrichment (1 day)
 
@@ -678,6 +683,6 @@ never imports `journal`.
 
 ## 11. Next action
 
-J0 is done. Start **J1**: `journal/tools.py` (shared JSON-safe functions over `JournalDB` +
-`analytics`), `similar.py`, `mcp_server.py`, `.mcp.json`, `CLAUDE.md` coach rules — so the
-suggestion feature works in this chat before any Telegram or API-key work is needed.
+J0 and J1 code are done. Next: (1) restart Claude Code in this repo so `.mcp.json` loads and
+try "what's my win rate on 4H breaks?"; (2) **J2** — persist watcher signals to `journal.db`,
+`replay.py --to-journal`, import `signals_sol_1d_binance.csv`, alert history footer.
