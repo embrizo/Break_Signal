@@ -1,0 +1,13 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "journal-dashboard",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "break_signal", "-c", "config.yaml"],
+      "port": 8787,
+      "url": "http://127.0.0.1:8787",
+      "env": { "PYTHONPATH": "src", "PYTHONIOENCODING": "utf-8" }
+    }
+  ]
+}

@@ -30,6 +30,9 @@ break-signal-journal-mcp = "break_signal.journal.mcp_server:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"break_signal.journal" = ["static/*.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["live: calls the real Anthropic API (needs ANTHROPIC_API_KEY, costs money)"]

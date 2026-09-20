@@ -6,7 +6,7 @@ the system fires a breakout → you take (or skip) the trade → you log the res
 "should I take this?", answers with price-action suggestions grounded in **your own
 trades**, not generic advice.
 
-**Status:** J0–J5 code done (2026-09-20). Remaining: live checks (API key, Telegram, OKX) and the actual Pi deploy. J6 optional.
+**Status:** J0–J6 code done (2026-09-20; embeddings intentionally deferred). Remaining: live checks (API key, Telegram, OKX) and the actual Pi deploy.
 **Date:** 2026-09-20
 **Source docs:** `IMPLEMENTATION_PLAN.md` (Break Signal, Phases 1–2 built),
 `trading_journal_implementation_plan_AI_extended.md` (journal + AI concept, analysed in §1)
@@ -558,13 +558,27 @@ with real numbers from your journal and a live OKX snapshot. (Journal half ✔; 
       "Starting N watcher(s) + telegram bot + report scheduler + nightly backup".
 ```
 
-### Phase J6 — Optional later
+### Phase J6 — Optional later — 3 of 4 DONE 2026-09-20
 
-- Screenshot vision review: `/review` attaches PRE/POST PNGs as image blocks; observations stored as
-  `ai_analysis.kind='vision'` and labelled *observation*, never fact
-- Embedding-based similar trades (Voyage) if deterministic matching feels weak past ~500 trades
-- Web dashboard (Break Signal Phase 3): FastAPI + Lightweight Charts showing lines, alerts, and trade markers
-- Pine alert webhook → `signals` (source='pine') once TradingView webhooks are available on the plan
+- [x] Screenshot vision review: `Coach.review(with_images=True)` attaches the trade's `/shot` PRE/POST images
+      (base64, PRE first, ≤4, ≤5 MB, png/jpg/webp/gif; others reported in `images_skipped`); `REVIEW_VISION_ADDENDUM`
+      confines what is read off a chart to `chart_observations`, stored as `ai_analysis.kind='vision'` with
+      `label=observation`. CLI `review --no-images`.
+- [ ] Embedding-based similar trades — **deliberately not built**: the trigger ("weak past ~500 trades") has not
+      happened; the journal has 0 real trades. Revisit with Voyage when `journal_similar_trades` stops feeling right.
+- [x] Web dashboard: `journal/web.py` + `static/dashboard.html` — **aiohttp, not FastAPI** (already a dependency;
+      one server, one port shared with the webhook). Lightweight Charts: candles from OKX, engine trendlines drawn
+      anchor→now (`snapshot_from_candles` lines now carry `anchor_ts/anchor_value/last_ts`), ▲/▼ stored alerts,
+      ◆/■ trade entries/exits, equity curve, all-time + 30 d stats, open trades, tag table, memories, recent alerts.
+      `/api/{config,summary,trades,signals,chart}`; every payload goes through `json_safe` (Python's json emits
+      `Infinity`, browsers refuse it — found in the browser, fixed, test now asserts strict JSON). Read-only, no
+      auth, LAN only. Config `web: {enabled, host, port, dashboard}`. Verified in the browser pane (chart shows the
+      OKX error here; panels + equity render).
+- [x] Pine alert webhook: `journal/webhook.py` — `POST /pine/<secret>` (TradingView can't set headers), parses
+      newline-joined / array / single JSON exactly as `pine/break_signal.pine` emits, normalises `SOLUSDT.P` →
+      `SOL-USDT-SWAP` and periods `240` → `4H`, converts bar close to open time, stores `source='pine'`
+      idempotently, optional `notify` through the alert notifiers with the footer. Config `webhook: {enabled,
+      secret, notify}`. Verified live with curl (two alerts → ids 11/12, resend → duplicates).
 
 ---
 
@@ -736,6 +750,8 @@ All planned code (J0–J5) is done. What's left is operational and needs things 
 2. Telegram: `config.yaml` with the bot token + your chat id in `telegram_bot.allowed_chat_ids` → run the
    service, send `/help`, `/trade …`, `/report`.
 3. OKX reachable (VPN or the Pi's network) → `market_snapshot` in Claude Code, and the watcher's live path.
-4. Pi: `AI_ENABLED=1 docker compose up -d --build`, watch the logs, wait for the first alert with a 📒 footer.
+4. Pi: `AI_ENABLED=1 docker compose up -d --build` (publish 8787 if you want the dashboard / webhook), watch
+   the logs, open `http://<pi>:8787/`, wait for the first alert with a 📒 footer.
+5. TradingView: point the indicator's alert webhook at `/pine/<secret>` once a route in exists.
 
-Then J6 items as wanted (screenshot vision review, embeddings, web dashboard, Pine webhook).
+Only embeddings remain unbuilt, by design.

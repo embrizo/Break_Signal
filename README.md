@@ -159,7 +159,23 @@ lopsided result, or a rule broken 3+ times — each with the trade ids behind it
 `/confirm <id>` keeps one for good; `/forget <id>` drops it.
 
 `/ask` and `/review` need `ai.enabled: true` and `ANTHROPIC_API_KEY` (or
-`ai.api_key`) plus `pip install -e .[ai]`. The coach only has **read-only** tools —
+`ai.api_key`) plus `pip install -e .[ai]`. `/review` also attaches the trade's
+`/shot` screenshots; whatever the model reads off a chart comes back under
+*CHART (observations, not facts)* and is stored separately.
+
+### Dashboard and TradingView webhook
+
+Set `web.enabled: true` and open `http://<pi>:8787/` on your LAN: live candles
+with the engine's trendlines drawn on them, ▲/▼ markers for stored alerts, ◆/■
+markers for your entries and exits, equity curve, stats, tags, memories, recent
+alerts. Read-only and unauthenticated — don't expose it to the internet.
+
+The same server can receive the Pine indicator's alerts: set `webhook.enabled`
+and a long `webhook.secret`, point a TradingView alert's webhook URL at
+`http://<host>:8787/pine/<secret>`, and every break the indicator fires lands in
+the journal as a `pine` signal (with `webhook.notify` it is also pushed to
+Telegram/Discord with the history footer). Only that path needs a route in from
+the internet. The coach only has **read-only** tools —
 it can never log or edit a trade — and every answer is stored in `ai_analysis`
 with the model, prompt version and the exact tool results it saw. Numbers in a
 reply that don't appear in any tool result are flagged with ⚠. Try it without
@@ -198,7 +214,8 @@ src/break_signal/
   backtest/    offline replay -> CSV
   journal/     trade journal: db, parser, analytics, rules, similar, footer, memory,
                report, export, backup, tools, mcp_server (Claude Code),
-               coach + prompts (Anthropic API), cli
+               coach + prompts (Anthropic API), web + static/dashboard.html,
+               webhook (TradingView), cli
   watcher.py   one (symbol, timeframe) worker
   __main__.py  entrypoint
 tests/         algorithm tests on synthetic data

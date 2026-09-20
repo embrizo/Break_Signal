@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Break Signal — journal</title>
+<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#262a33; --fg:#d7dae0; --muted:#8b91a0;
+          --up:#2a9d8f; --dn:#e76f51; --res:#e9c46a; --sup:#4cc9f0; --accent:#a78bfa; }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif }
+  header { display:flex; gap:12px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap }
+  header h1 { font-size:16px; margin:0 12px 0 0; font-weight:600 }
+  select, button { background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 10px; font:inherit }
+  button { cursor:pointer } button:hover { border-color:var(--accent) }
+  main { display:grid; grid-template-columns: 2fr 1fr; gap:12px; padding:12px 16px }
+  @media (max-width: 1000px) { main { grid-template-columns:1fr } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; min-width:0; overflow:hidden }
+  main > .stack { min-width:0 }
+  .panel h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 8px }
+  #chart { height:460px } #equity { height:160px }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:8px }
+  .stat { background:var(--bg); border-radius:8px; padding:8px 10px }
+  .stat .k { color:var(--muted); font-size:11px } .stat .v { font-size:18px; font-weight:600 }
+  table { width:100%; border-collapse:collapse; font-size:13px }
+  th, td { text-align:left; padding:5px 6px; border-bottom:1px solid var(--line); white-space:nowrap }
+  th { color:var(--muted); font-weight:500 }
+  .pos { color:var(--up) } .neg { color:var(--dn) } .muted { color:var(--muted) }
+  .tag { display:inline-block; background:var(--bg); border-radius:4px; padding:1px 6px; margin-right:4px; font-size:12px }
+  .err { color:var(--dn); padding:8px }
+  .stack { display:flex; flex-direction:column; gap:12px }
+  .scroll { max-height:260px; overflow:auto }
+  .legend { display:flex; gap:14px; color:var(--muted); font-size:12px; margin-top:6px; flex-wrap:wrap }
+  .legend i { display:inline-block; width:14px; height:3px; vertical-align:middle; margin-right:5px }
+</style>
+</head>
+<body>
+<header>
+  <h1>Break Signal · journal</h1>
+  <select id="symbol"></select>
+  <select id="tf"></select>
+  <button id="reload">Reload</button>
+  <span id="status" class="muted"></span>
+</header>
+<main>
+  <div class="stack">
+    <div class="panel">
+      <h2>Chart · lines · alerts · trades</h2>
+      <div id="chart"></div>
+      <div class="legend">
+        <span><i style="background:var(--res)"></i>resistance</span>
+        <span><i style="background:var(--sup)"></i>support</span>
+        <span>▲/▼ alert (stored signal)</span>
+        <span>◆ trade entry · ✕ exit</span>
+      </div>
+      <div id="chart-info" class="muted" style="margin-top:6px"></div>
+    </div>
+    <div class="panel"><h2>Equity (cumulative R)</h2><div id="equity"></div></div>
+    <div class="panel"><h2>Recent trades</h2><div class="scroll" id="trades"></div></div>
+  </div>
+  <div class="stack">
+    <div class="panel"><h2>All time</h2><div class="stats" id="stats-all"></div></div>
+    <div class="panel"><h2>Last 30 days</h2><div class="stats" id="stats-30"></div></div>
+    <div class="panel"><h2>Open trades</h2><div id="open"></div></div>
+    <div class="panel"><h2>By entry tag</h2><div class="scroll" id="tags"></div></div>
+    <div class="panel"><h2>Coach memory</h2><div id="memories"></div></div>
+    <div class="panel"><h2>Recent alerts</h2><div class="scroll" id="signals"></div></div>
+  </div>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const fmt = (x, d = 2) => (x == null ? '–' : (typeof x === 'string' ? x : x.toFixed(d)));
+const pct = (x) => (x == null ? '–' : Math.round(x * 100) + '%');
+const cls = (x) => (x == null ? '' : x >= 0 ? 'pos' : 'neg');
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function j(url) { const r = await fetch(url); if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.statusText); } return r.json(); }
+
+// ── charts ──────────────────────────────────────────────────────────────────
+const chartOpts = { autoSize: true, layout: { background: { color: '#171a21' }, textColor: '#d7dae0' },
+  grid: { vertLines: { color: '#262a33' }, horzLines: { color: '#262a33' } },
+  timeScale: { timeVisible: true, borderColor: '#262a33' }, rightPriceScale: { borderColor: '#262a33' } };
+const chart = LightweightCharts.createChart($('#chart'), chartOpts);
+const candles = chart.addCandlestickSeries({ upColor: '#2a9d8f', downColor: '#e76f51', wickUpColor: '#2a9d8f', wickDownColor: '#e76f51', borderVisible: false });
+let lineSeries = [];
+const eqChart = LightweightCharts.createChart($('#equity'), { ...chartOpts, timeScale: { visible: false } });
+const eqSeries = eqChart.addLineSeries({ color: '#a78bfa', lineWidth: 2 });
+
+async function loadChart() {
+  const symbol = $('#symbol').value, tf = $('#tf').value;
+  $('#status').textContent = 'loading chart…';
+  lineSeries.forEach(s => chart.removeSeries(s)); lineSeries = [];
+  try {
+    const d = await j(`/api/chart?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(tf)}&bars=300`);
+    candles.setData(d.candles);
+    const snap = d.snapshot;
+    for (const ln of snap.lines || []) {
+      const s = chart.addLineSeries({ color: ln.side === 'resistance' ? '#e9c46a' : '#4cc9f0', lineWidth: 1, lastValueVisible: false, priceLineVisible: false });
+      s.setData([{ time: ln.anchor_ts / 1000, value: ln.anchor_value }, { time: ln.last_ts / 1000, value: ln.value }]);
+      lineSeries.push(s);
+    }
+    const markers = [];
+    for (const s of d.signals) markers.push({ time: s.candle_ts / 1000, position: s.event === 'break_up' ? 'belowBar' : 'aboveBar',
+      color: s.event === 'break_up' ? '#2a9d8f' : '#e76f51', shape: s.event === 'break_up' ? 'arrowUp' : 'arrowDown', text: `#${s.id} ${s.source}` });
+    for (const t of d.trades) {
+      if (t.opened_ts) markers.push({ time: t.opened_ts / 1000, position: 'belowBar', color: '#a78bfa', shape: 'circle', text: `#${t.id} ${t.direction}` });
+      if (t.closed_ts) markers.push({ time: t.closed_ts / 1000, position: 'aboveBar', color: t.r_multiple >= 0 ? '#2a9d8f' : '#e76f51', shape: 'square', text: `#${t.id} ${fmt(t.r_multiple)}R` });
+    }
+    markers.sort((a, b) => a.time - b.time);
+    candles.setMarkers(markers);
+    chart.timeScale().fitContent();
+    const sig = snap.last_bar_signal ? ` · <b>${snap.last_bar_signal.event}</b> on last bar` : '';
+    $('#chart-info').innerHTML = `as of ${snap.as_of} · price ${fmt(snap.price, 4)} · ATR ${fmt(snap.atr, 4)} · RSI ${fmt(snap.rsi, 1)} · vol ${fmt(snap.vol_ratio)}× · ${(snap.lines || []).length} lines${sig}`;
+    $('#status').textContent = '';
+  } catch (e) {
+    candles.setData([]); candles.setMarkers([]);
+    $('#chart-info').innerHTML = `<span class="err">chart unavailable: ${esc(e.message)}</span>`;
+    $('#status').textContent = '';
+  }
+}
+
+// ── panels ──────────────────────────────────────────────────────────────────
+function stats(el, s) {
+  const items = [['trades', s.n], ['win', pct(s.win_rate)], ['avg R', fmt(s.avg_r)], ['total R', fmt(s.total_r)],
+    ['PF', s.profit_factor == null ? '–' : (typeof s.profit_factor === 'number' ? fmt(s.profit_factor) : s.profit_factor)],
+    ['max DD', fmt(s.max_drawdown_r) + 'R'], ['W/L/BE', `${s.wins}/${s.losses}/${s.be}`],
+    ['streak', `${s.streaks.current} ${s.streaks.current_kind || ''}`]];
+  el.innerHTML = items.map(([k, v]) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+}
+function tradeRow(t) {
+  return `<tr><td>#${t.id}</td><td>${t.status}</td><td>${esc(t.symbol)} ${esc(t.tf || '')}</td><td>${t.direction}</td>
+    <td>${fmt(t.entry_price, 4)}</td><td>${fmt(t.sl_price, 4)}</td><td>${fmt(t.tp_price, 4)}</td><td>${fmt(t.exit_price, 4)}</td>
+    <td>${t.outcome || ''}</td><td class="${cls(t.r_multiple)}">${t.r_multiple == null ? '' : fmt(t.r_multiple) + 'R'}</td>
+    <td>${(t.entry_tags || []).concat(t.exit_tags || []).map(x => `<span class="tag">${esc(x)}</span>`).join('')}</td>
+    <td class="muted">${esc(t.opened || '')}</td></tr>`;
+}
+async function loadPanels() {
+  const s = await j('/api/summary');
+  stats($('#stats-all'), s.all_time); stats($('#stats-30'), s.last_30d);
+  eqSeries.setData(s.equity_curve.map((p, i) => ({ time: i + 1, value: p.cum_r }))); eqChart.timeScale().fitContent();
+  $('#open').innerHTML = s.open_trades.length ? `<table>${s.open_trades.map(tradeRow).join('')}</table>` : '<div class="muted">none</div>';
+  const tags = Object.entries(s.tag_stats_entry);
+  $('#tags').innerHTML = tags.length ? `<table><tr><th>tag</th><th>n</th><th>win</th><th>avg R</th></tr>${tags.map(([k, v]) =>
+    `<tr><td>${esc(k)}</td><td>${v.n}</td><td>${pct(v.win_rate)}</td><td class="${cls(v.avg_r)}">${fmt(v.avg_r)}</td></tr>`).join('')}</table>` : '<div class="muted">none</div>';
+  $('#memories').innerHTML = s.memories.length ? s.memories.map(m => `<div>${m.confirmed ? '✓' : '·'} <span class="muted">[${m.type}]</span> ${esc(m.content)}</div>`).join('')
+    : '<div class="muted">nothing yet — appears at 5+ trades on a pattern or 3+ rule breaks</div>';
+  const tr = await j('/api/trades?limit=30');
+  $('#trades').innerHTML = tr.trades.length ? `<table><tr><th>id</th><th>status</th><th>sym</th><th>dir</th><th>entry</th><th>sl</th><th>tp</th><th>exit</th><th>out</th><th>R</th><th>tags</th><th>opened</th></tr>${tr.trades.map(tradeRow).join('')}</table>` : '<div class="muted">no trades yet</div>';
+  const sg = await j('/api/signals?limit=20');
+  $('#signals').innerHTML = sg.length ? `<table><tr><th>id</th><th>src</th><th>sym</th><th>tf</th><th>event</th><th>price</th><th>rsi</th><th>candle</th></tr>${sg.map(x =>
+    `<tr><td>#${x.id}</td><td>${x.source}</td><td>${esc(x.symbol)}</td><td>${x.tf}</td><td class="${x.event === 'break_up' ? 'pos' : 'neg'}">${x.event}</td><td>${fmt(x.price, 4)}</td><td>${fmt(x.rsi, 1)}</td><td class="muted">${x.candle}</td></tr>`).join('')}</table>` : '<div class="muted">none</div>';
+}
+
+// ── boot ────────────────────────────────────────────────────────────────────
+(async () => {
+  const cfg = await j('/api/config');
+  const syms = [...new Set(cfg.watches.map(w => w.symbol))], tfs = [...new Set(cfg.watches.map(w => w.tf))];
+  if (!syms.length) { syms.push('SOL-USDT-SWAP'); tfs.push('1D'); }
+  $('#symbol').innerHTML = syms.map(s => `<option>${esc(s)}</option>`).join('');
+  $('#tf').innerHTML = [...new Set([...tfs, '1D', '4H'])].map(t => `<option>${esc(t)}</option>`).join('');
+  $('#reload').onclick = () => { loadChart(); loadPanels(); };
+  $('#symbol').onchange = $('#tf').onchange = loadChart;
+  await Promise.all([loadPanels(), loadChart()]);
+})();
+</script>
+</body>
+</html>

@@ -27,10 +27,14 @@ from .parser import parse_close, parse_trade, resolve_symbol
 AUTO_LINK_BARS = 3   # a new trade links to a matching alert within this many bars
 
 
-def _json(x: Any) -> Any:
-    """Recursively convert numpy scalars so the result is JSON-safe. NaN → null;
+def json_safe(x: Any) -> Any:
+    """Recursively convert numpy scalars so the result is strict-JSON-safe. NaN → null;
     ±inf → the string "inf"/"-inf" (an all-winning profit factor is real
-    information, not missing data)."""
+    information, not missing data; and browsers reject bare ``Infinity``)."""
+    return _json(x)
+
+
+def _json(x: Any) -> Any:
     if isinstance(x, dict):
         return {k: _json(v) for k, v in x.items()}
     if isinstance(x, (list, tuple)):
@@ -109,6 +113,9 @@ def snapshot_from_candles(symbol: str, tf: str, candles: Candles, params: Params
             "span_bars": ln.bx - ln.ax,
             "slope_per_bar": round(ln.slope, 6),
             "line_id": ln.id,
+            # two points to draw it: anchor A → current bar
+            "anchor_ts": int(ln.ts_a), "anchor_value": round(ln.ay, 6),
+            "last_ts": int(candles.ts[last]),
         })
     lines.sort(key=lambda d: abs(d["dist_pct"]))
     res_above = [d for d in lines if d["side"] == "resistance" and d["value"] > price]

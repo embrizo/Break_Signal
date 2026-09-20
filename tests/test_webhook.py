@@ -84,17 +84,19 @@ def _run(coro):
 
 def test_http_endpoint_secret_and_notify():
     from aiohttp.test_utils import TestClient, TestServer
+    from break_signal.journal import web as WEB
 
     cfg = Config(watches=[Watch(symbol="SOL-USDT-SWAP", timeframe="4H")],
                  webhook={"enabled": True, "secret": "s3cret", "notify": True})
     db = JournalDB(":memory:")
     cap = _Cap()
-    app = W.build_app(cfg, db, [cap])
+    app = WEB.build_app(cfg, db, [cap])
 
     async def go():
         async with TestClient(TestServer(app)) as c:
             r = await c.get("/health")
-            assert r.status == 200 and (await r.json()) == {"ok": True, "signals": 0}
+            assert r.status == 200 and (await r.json()) == {"ok": True, "signals": 0, "trades": 0}
+            assert (await c.get("/")).status == 404                          # web.enabled false → no dashboard
             r = await c.post("/pine/wrong", data=PINE)
             assert r.status == 403
             r = await c.post("/pine/s3cret", data=PINE + "\n" + PINE2)
@@ -117,9 +119,18 @@ def test_http_endpoint_secret_and_notify():
     db.close()
 
 
-def test_serve_refuses_empty_secret(caplog):
+def test_empty_secret_mounts_no_webhook_route():
+    from aiohttp.test_utils import TestClient, TestServer
+    from break_signal.journal import web as WEB
+
     cfg = Config(watches=[Watch(symbol="SOL-USDT-SWAP", timeframe="4H")], webhook={"enabled": True})
     db = JournalDB(":memory:")
-    _run(W.serve(cfg, db, []))          # returns immediately
-    assert "secret is empty" in caplog.text
+    app = WEB.build_app(cfg, db, [])
+
+    async def go():
+        async with TestClient(TestServer(app)) as c:
+            assert (await c.post("/pine/", data=PINE)).status == 404
+            assert (await c.post("/pine/anything", data=PINE)).status == 404
+    _run(go())
+    assert db.list_signals() == []
     db.close()

@@ -11,7 +11,7 @@ Each object is normalised (Pine ticker ``SOLUSDT.P`` → ``SOL-USDT-SWAP``, peri
 ``240`` → ``4H``, close time → bar open time) and stored with ``source='pine'``.
 With ``webhook.notify`` the alert is also pushed through the Telegram/Discord
 notifiers with the journal footer — useful when the Pi watcher is not running.
-``ingest()`` is pure; only ``serve()`` touches the network.
+``ingest()`` is pure; the route is mounted on the shared server in ``web.py``.
 """
 from __future__ import annotations
 
@@ -134,8 +134,8 @@ def ingest(db: JournalDB, text: str, aliases: dict[str, str] | None = None) -> d
     return {"stored": stored, "duplicates": dup, "rejected": rejected}
 
 
-# ── server ──────────────────────────────────────────────────────────────────
-def build_app(cfg: "Config", db: JournalDB, notifiers: list[Any]):
+# ── HTTP handler (mounted by web.py) ────────────────────────────────────────
+def make_pine_handler(cfg: "Config", db: JournalDB, notifiers: list[Any]):
     from aiohttp import web
 
     from .footer import alert_footer
@@ -143,9 +143,6 @@ def build_app(cfg: "Config", db: JournalDB, notifiers: list[Any]):
 
     secret = cfg.webhook.secret
     aliases = cfg.journal.symbol_aliases
-
-    async def health(_req):
-        return web.json_response({"ok": True, "signals": db.conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0]})
 
     async def pine(req):
         if not secret or req.match_info["secret"] != secret:
@@ -175,28 +172,4 @@ def build_app(cfg: "Config", db: JournalDB, notifiers: list[Any]):
                  sum(s["new"] for s in res["stored"]), len(res["rejected"]))
         return web.json_response(out, status=status)
 
-    app = web.Application()
-    app.router.add_get("/health", health)
-    app.router.add_post("/pine/{secret}", pine)
-    return app
-
-
-async def serve(cfg: "Config", db: JournalDB, notifiers: list[Any]) -> None:
-    """Background task: run the receiver until cancelled."""
-    import asyncio
-
-    from aiohttp import web
-
-    if not cfg.webhook.secret:
-        log.error("webhook.enabled but webhook.secret is empty — not starting (anyone could post signals)")
-        return
-    runner = web.AppRunner(build_app(cfg, db, notifiers))
-    await runner.setup()
-    site = web.TCPSite(runner, cfg.webhook.host, cfg.webhook.port)
-    await site.start()
-    log.info("webhook: listening on http://%s:%d/pine/<secret>", cfg.webhook.host, cfg.webhook.port)
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    finally:
-        await runner.cleanup()
+    return pine

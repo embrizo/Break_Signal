@@ -61,12 +61,18 @@ class AiCfg(BaseModel):
     api_key: str = ""                # empty → ANTHROPIC_API_KEY from the environment
 
 
-class WebhookCfg(BaseModel):
-    """TradingView alert webhook → journal signals (source='pine')."""
+class WebCfg(BaseModel):
+    """The journal's HTTP server: dashboard + webhook share one port."""
     enabled: bool = False
     host: str = "0.0.0.0"
     port: int = 8787
-    secret: str = ""          # required when enabled; goes in the URL path: /pine/<secret>
+    dashboard: bool = True    # read-only dashboard at / (LAN only — no auth)
+
+
+class WebhookCfg(BaseModel):
+    """TradingView alert webhook → journal signals (source='pine'), mounted at /pine/<secret>."""
+    enabled: bool = False
+    secret: str = ""          # required when enabled; goes in the URL path
     notify: bool = False      # also push each new pine alert through the Telegram/Discord notifiers
 
 
@@ -83,6 +89,7 @@ class Config(BaseModel):
     journal: JournalCfg = Field(default_factory=JournalCfg)
     telegram_bot: TelegramBotCfg = Field(default_factory=TelegramBotCfg)
     ai: AiCfg = Field(default_factory=AiCfg)
+    web: WebCfg = Field(default_factory=WebCfg)
     webhook: WebhookCfg = Field(default_factory=WebhookCfg)
 
     def to_params(self) -> Params:

@@ -9,10 +9,11 @@ that does real work.
 
 ---
 
-## Status: journal + AI coach fully built (J0–J5), awaiting live checks and the Pi deploy (2026-09-20)
+## Status: journal + AI coach fully built (J0–J6), awaiting live checks and the Pi deploy (2026-09-20)
 
 Everything in [`JOURNAL_AI_IMPLEMENTATION_PLAN.md`](JOURNAL_AI_IMPLEMENTATION_PLAN.md)
-§5 J0–J5 is implemented, unit-tested (178 tests + 3 key-gated live evals) and pushed.
+§5 J0–J6 is implemented (embeddings deliberately deferred), unit-tested (206 tests + 3
+key-gated live evals) and pushed.
 The three front-ends (CLI, Claude Code MCP, Telegram bot) share one `Tools` surface;
 `analytics.py` is the only place numbers are computed. What has NOT been exercised
 against real services from this machine:
@@ -81,7 +82,7 @@ Full spec: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) — algorithm (§2
 ## Quick run commands
 
 ```bash
-# All tests — numpy + pytest (+ aiohttp/websockets/mcp/anthropic for the wiring tests); 178 pass, 3 live skipped
+# All tests — numpy + pytest (+ aiohttp/websockets/mcp/anthropic for the wiring tests); 206 pass, 3 live skipped
 python -m pytest tests/ -q
 ANTHROPIC_API_KEY=... python -m pytest tests/evals -q      # 3 live coach evals, cost money
 
@@ -97,10 +98,10 @@ python -m break_signal.journal ask "how are my 4H breaks?"   # needs the API key
 # Backtest replay — needs OKX reachable (blocked on this machine); --to-journal stores the signals
 python -m break_signal.backtest.replay --symbol SOL-USDT-SWAP --tf 1D --limit 500 --out signals.csv --to-journal
 
-# Service — watchers + telegram bot + report scheduler + nightly backup
+# Service — watchers + telegram bot + report scheduler + nightly backup + web (dashboard/webhook)
 pip install -r requirements.txt            # + requirements-ai.txt for the coach
-cp config.example.yaml config.yaml         # secrets, telegram_bot.allowed_chat_ids, ai.enabled
-python -m break_signal -c config.yaml
+cp config.example.yaml config.yaml         # secrets, telegram_bot.allowed_chat_ids, ai.enabled, web.enabled
+python -m break_signal -c config.yaml      # dashboard at http://127.0.0.1:8787/ when web.enabled
 
 # Deploy (Pi 5)
 AI_ENABLED=1 ANTHROPIC_API_KEY=... docker compose up -d --build
@@ -150,6 +151,7 @@ AI_ENABLED=1 ANTHROPIC_API_KEY=... docker compose up -d --build
 - **Built phase J0** with defaults for the plan's §10 questions (R-multiples primary; bilingual seed tags from the source doc): `journal/{models,db,analytics,parser,cli}.py` + `__main__.py`, `journal:` config block, 59 new tests (81 total, all pass), README section. CLI smoke-tested end to end (add → close → event → list/show/stats/export). Gotcha: in PowerShell pass the trade line as ONE quoted string — bare `--` is stripped and `104,200` is split on the comma before Python sees it.
 - **Built phase J1**: `journal/{tools,similar,rules,mcp_server}.py`, `.mcp.json`, `CLAUDE.md`, `pyproject` extra `[ai]`; 40 new tests (121 total). `rules.py` was pulled forward from J4 because `journal_rule_check` needed it; violations are evaluated and stored on every add/close/event. Drove the MCP server over stdio with the `mcp` Python client — all tools round-trip. `market_snapshot` could not be run live: OKX is DNS-blocked on this machine; the pure `snapshot_from_candles()` is tested on the synthetic breakout fixture. Not yet done: the in-chat smoke test (needs a fresh Claude Code session to load `.mcp.json`).
 - **Code review of J0–J2** (`/code-review`, 6 findings, all fixed): tag counted twice when used at ENTRY+EXIT; `add_trade` crashed on a tf outside the OKX bar table; CLI bypassed `Tools` (no rule checks / seed / ctx copy); stats classified by R sign and could contradict `search_trades(outcome=)` → now count by `outcome`; PF=∞ became `null` over MCP → now `"inf"`; `rename_tag` clash was a raw IntegrityError. Added `tests/test_cli.py`. 137 tests pass.
+- **Built phase J6 (3 of 4)**: vision review (`Coach.review(with_images)`, `kind='vision'` rows), TradingView webhook (`journal/webhook.py`, `/pine/<secret>`, verified with curl), and the dashboard (`journal/web.py` + `static/dashboard.html`, **aiohttp not FastAPI** — one server/port shared with the webhook; Lightweight Charts with engine lines from `snapshot_from_candles` anchors, alert/trade markers; verified in the browser pane — chart itself shows the OKX error here). Found in the browser: `/api/summary` emitted `Infinity` (Python json) which browsers reject → all dashboard payloads go through `tools.json_safe`; test asserts strict JSON. Embeddings intentionally not built (trigger not met). `.claude/launch.json` starts the service for `/run` (expects a `config.yaml`). 206 tests pass.
 - **Built phase J5**: `journal/backup.py` (online `sqlite3` backup → `data/backups/journal-<stamp>.db` forced to `journal_mode=DELETE` so it is one file, `.md` twin, prune to `journal.backup_keep`, `verify()`; daily in-process scheduler at `journal.backup_time`; CLI `journal backup`), `journal/export.py` (md/csv/json shared by CLI and backup), `requirements-ai.txt` + Dockerfile `ARG AI_ENABLED`, compose env passthrough (`ANTHROPIC_API_KEY`, `OKX_REST_URL`, `OKX_WS_URL`) and documented `./data` layout. `docker compose config` validates; ran a real backup of `data/journal.db`. First backup left `-wal/-shm` sidecars (fixed; the two stray files from 11:04 can be deleted). 178 tests pass.
 - **Built phase J4**: `journal/memory.py` (deterministic evidence-backed memories: tag/tf/direction/RSI-band patterns with n ≥ 5 and lopsided win rate over 90 d, rules broken ≥ 3×; upsert by key, prune unconfirmed, keep confirmed + trader notes), `journal/report.py` (weekly/monthly metrics block → markdown, optional narrative via `Coach.narrative()`, optional PNG, in-process scheduler wired in `__main__`), footer rule hint, schema **v2** (`memories.key`) via the migrations table — verified on the real `data/journal.db`. Seed rules now only on DB creation. Bot `/report /memories /confirm /forget`; CLI `report`, `memories`; MCP `journal_report`, `journal_memories`, `journal_confirm_memory`, `journal_forget_memory`, `journal_add_memory_note`. Also: watcher backfill retry with backoff (was: service died when OKX unreachable at boot — verified live). Driving the report exposed a PF bug (declared-LOSS-at-+R made PF "inf") → PF sums only sign-matching R. 172 tests pass. matplotlib is NOT installed here, so `chart_png` is untested visually.
 - **Built phase J3**: `journal/coach.py` (AsyncAnthropic tool runner, 11 read-only `@beta_async_tool` wrappers, `parity_check()` number guard, `/review` via `messages.parse` + pydantic, every answer stored in `ai_analysis`, daily budget), `journal/prompts.py` (coach_v1 / review_v1 / weekly_v1), `notify/telegram_bot.py` (long-poll command bot, allowlist, `/shot` photos, pure `handle_command`), `build_telegram_bot()` in `__main__`, `telegram_bot:` + `ai:` config, CLI `ask` / `review`. Installed `anthropic 1.7.0` into the hermes venv. 20 unit tests with a fake client + 3 key-gated live evals (marker `live`). 154 pass, 3 skipped. **No API key on this machine** → live evals and a real `/ask` are untested; the SDK request shape (adaptive thinking, cache_control on system, max_iterations) was taken from the claude-api skill docs for SDK 1.x.
