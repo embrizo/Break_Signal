@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import io
 import json
 import sqlite3
 import sys
@@ -16,7 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import analytics
-from .db import JournalDB, now_ms
+from .db import JournalDB
+from .export import summary_block
 from .models import TAG_CATEGORIES, Trade
 from .parser import ParseError
 from .tools import Tools
@@ -64,18 +64,7 @@ _TRADE_HEADER = ["id", "status", "symbol", "tf", "dir", "entry", "sl", "tp", "ex
                  "outcome", "R", "opened (UTC)", "tags"]
 
 
-def _summary_block(title: str, s: dict) -> str:
-    st = s["streaks"]
-    pf = s["profit_factor"]
-    return (
-        f"{title}\n"
-        f"  n={s['n']}  W/L/BE={s['wins']}/{s['losses']}/{s['be']}  win_rate={_pct(s['win_rate'])}\n"
-        f"  avg_R={_f(s['avg_r'])}  total_R={_f(s['total_r'])}  PF={_f(pf)}"
-        f"  avg_win={_f(s['avg_win_r'])}R  avg_loss={_f(s['avg_loss_r'])}R  max_DD={_f(s['max_drawdown_r'])}R\n"
-        f"  streaks: max_win={st['max_win']} max_loss={st['max_loss']} "
-        f"current={st['current']} {st['current_kind'] or ''}"
-        + (f"\n  PnL={_f(s['total_pnl'])} (n={s['pnl_n']})" if s["total_pnl"] is not None else "")
-    )
+_summary_block = summary_block   # shared with export.py
 
 
 def _group_table(groups: dict[str, dict]) -> str:
@@ -330,6 +319,22 @@ def cmd_report(db: JournalDB, args, tools: Tools) -> int:
     return 0
 
 
+def cmd_backup(db: JournalDB, args, tools: Tools) -> int:
+    from . import backup as B
+    dest = args.dir or (tools.cfg.journal.backup_dir if tools.cfg else None) or "data/backups"
+    keep = args.keep if args.keep is not None else (tools.cfg.journal.backup_keep if tools.cfg else 14)
+    if args.verify:
+        print(json.dumps(B.verify(args.verify), indent=2))
+        return 0
+    out = B.backup(db, dest, keep)
+    print(f"wrote {out['db']} ({out['bytes']} bytes) and {out['md']}")
+    for p in out["pruned"]:
+        print(f"pruned {p}")
+    v = B.verify(out["db"])
+    print(f"verified: integrity={v['integrity']} trades={v['trades']} signals={v['signals']}")
+    return 0 if v["integrity"] == "ok" else 1
+
+
 def cmd_memories(db: JournalDB, args, tools: Tools) -> int:
     from .memory import format_memories
     if args.mem_cmd == "list":
@@ -373,46 +378,14 @@ def cmd_stats(db: JournalDB, args, tools: Tools) -> int:
 
 
 def cmd_export(db: JournalDB, args, tools: Tools) -> int:
-    trades = list(reversed(_filtered(db, args)))  # oldest first for reading
+    from . import export as X
+    trades = _filtered(db, args)
     if args.format == "json":
-        text = json.dumps([t.to_dict() for t in trades], ensure_ascii=False, indent=2)
+        text = X.to_json(list(reversed(trades)))
     elif args.format == "csv":
-        buf = io.StringIO()
-        cols = ["id", "status", "signal_id", "symbol", "tf", "direction", "entry_price", "sl_price",
-                "tp_price", "exit_price", "position_size", "risk_amount", "risk_pct", "fees",
-                "outcome", "r_multiple", "pnl_amount", "opened_ts", "closed_ts", "ctx_session",
-                "confidence", "entry_tags", "exit_tags", "entry_reason", "exit_reason", "notes"]
-        w = csv.DictWriter(buf, fieldnames=cols, lineterminator="\n")
-        w.writeheader()
-        for t in trades:
-            d = t.to_dict()
-            d["entry_tags"] = "|".join(t.entry_tags)
-            d["exit_tags"] = "|".join(t.exit_tags)
-            w.writerow({c: d.get(c) for c in cols})
-        text = buf.getvalue()
-    else:  # markdown
-        lines = ["# Trading journal export", "",
-                 f"_{len(trades)} trades, exported {_ts(now_ms())} UTC_", ""]
-        lines.append(_summary_block("## Summary", analytics.summarize(trades)))
-        lines.append("")
-        for t in trades:
-            lines.append(f"## #{t.id} {t.symbol} {t.tf or ''} {t.direction} — {t.status}"
-                         + (f" {t.outcome} {_f(t.r_multiple)}R" if t.outcome else ""))
-            lines.append(f"- opened {_ts(t.opened_ts)} · closed {_ts(t.closed_ts)}")
-            lines.append(f"- entry {_f(t.entry_price, 4)} · sl {_f(t.sl_price, 4)} · "
-                         f"tp {_f(t.tp_price, 4)} · exit {_f(t.exit_price, 4)}")
-            if t.entry_tags:
-                lines.append(f"- entry tags: {', '.join(t.entry_tags)}")
-            if t.exit_tags:
-                lines.append(f"- exit tags: {', '.join(t.exit_tags)}")
-            if t.entry_reason:
-                lines.append(f"- entry reason: {t.entry_reason}")
-            if t.exit_reason:
-                lines.append(f"- exit reason: {t.exit_reason}")
-            for e in t.events:
-                lines.append(f"- event {_ts(e.event_ts)}: {e.type} {e.data}")
-            lines.append("")
-        text = "\n".join(lines)
+        text = X.to_csv(list(reversed(trades)))
+    else:
+        text = X.to_markdown(trades)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
         print(f"wrote {args.out}")
@@ -514,6 +487,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--png", help="also write the equity/tag chart to this path (needs matplotlib)")
     p.add_argument("--json", action="store_true", help="print the metrics block instead of markdown")
     p.set_defaults(fn=cmd_report)
+
+    p = sub.add_parser("backup", help="snapshot the journal (.db + .md) into the backup dir")
+    p.add_argument("--dir", help="destination (default: config journal.backup_dir or data/backups)")
+    p.add_argument("--keep", type=int, help="snapshots to retain (default: config or 14)")
+    p.add_argument("--verify", metavar="SNAPSHOT.db", help="instead: integrity-check an existing snapshot")
+    p.set_defaults(fn=cmd_backup)
 
     p = sub.add_parser("memories", help="coach memory: evidence-backed observations")
     ms = p.add_subparsers(dest="mem_cmd", required=True)

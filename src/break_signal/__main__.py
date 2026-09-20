@@ -55,8 +55,12 @@ async def run(config_path: str) -> None:
     if cfg.ai.weekly_report and notifiers:
         from .journal.report import run_scheduler
         tasks.append(run_scheduler(cfg, journal, notifiers, coach))
-    log.info("Starting %d watcher(s)%s%s", len(watchers), " + telegram bot" if bot else "",
-             " + report scheduler" if cfg.ai.weekly_report and notifiers else "")
+    if cfg.journal.backup_dir:
+        from .journal.backup import run_scheduler as run_backups
+        tasks.append(run_backups(cfg, journal))
+    log.info("Starting %d watcher(s)%s%s%s", len(watchers), " + telegram bot" if bot else "",
+             " + report scheduler" if cfg.ai.weekly_report and notifiers else "",
+             " + nightly backup" if cfg.journal.backup_dir else "")
     try:
         await asyncio.gather(*tasks)
     finally:

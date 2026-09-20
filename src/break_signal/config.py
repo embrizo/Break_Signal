@@ -38,6 +38,9 @@ class JournalCfg(BaseModel):
     })
     history_footer: bool = True
     account_size: float | None = None   # enables risk_pct from risk_amount
+    backup_dir: str | None = "data/backups"   # None/"" disables the nightly backup
+    backup_time: str = "00:05"                # UTC, HH:MM
+    backup_keep: int = 14                     # snapshots retained
 
 
 class TelegramBotCfg(BaseModel):

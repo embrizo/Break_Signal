@@ -1,0 +1,4 @@
+# Optional: AI coach (Telegram /ask, /review, report narrative) and the MCP server.
+# Installed in the image only when built with --build-arg AI_ENABLED=1.
+anthropic>=1.0,<2
+mcp>=1.2,<2

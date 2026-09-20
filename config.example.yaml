@@ -63,6 +63,9 @@ journal:
     ETH: ETH-USDT-SWAP
   history_footer: true        # append "your history" to alerts when n >= 3 (phase J2)
   account_size: null          # optional; enables risk_pct auto-calc from risk_amount
+  backup_dir: data/backups    # nightly .db snapshot + .md export; null disables
+  backup_time: "00:05"        # UTC
+  backup_keep: 14             # snapshots to retain
 
 # ── Telegram command bot: /trade /close /skip /event /list /show /stats /ask /review ──
 # Uses channels.telegram.bot_token. Only allowed_chat_ids may write to the journal.

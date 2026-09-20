@@ -48,8 +48,29 @@ docker compose logs -f
 ```
 
 The image is `python:3.11-slim-bookworm` (multi-arch) and pulls prebuilt ARM
-wheels from piwheels, so the build is minutes, not an hour. State persists in
-`./data` (back it with an SSD/USB, not the SD card).
+wheels from piwheels, so the build is minutes, not an hour. Everything that must
+survive a rebuild lives in `./data` (back it with an SSD/USB, not the SD card):
+
+```
+data/state.db               alert dedupe state
+data/journal.db             the trade journal
+data/journal/screenshots/   photos sent to the Telegram bot
+data/backups/               nightly journal-<stamp>.db + .md (journal.backup_time, 14 kept)
+```
+
+For the AI coach in the container, build with the SDK and pass the key through:
+
+```bash
+AI_ENABLED=1 ANTHROPIC_API_KEY=sk-ant-... docker compose up -d --build
+```
+
+(or put both in a `.env` file next to `docker-compose.yml`). `OKX_REST_URL` /
+`OKX_WS_URL` in the same place switch to a regional OKX host if the default is
+geo-blocked where the Pi lives.
+
+The nightly backup is an online SQLite snapshot (`journal backup` does the same
+by hand; `journal backup --verify <file>` integrity-checks one). Every snapshot
+comes with a markdown twin, so the history is readable without any tooling.
 
 ## Backtest the rules
 
@@ -176,7 +197,8 @@ src/break_signal/
   render/      mplfinance chart snapshot
   backtest/    offline replay -> CSV
   journal/     trade journal: db, parser, analytics, rules, similar, footer, memory,
-               report, tools, mcp_server (Claude Code), coach + prompts (Anthropic API), cli
+               report, export, backup, tools, mcp_server (Claude Code),
+               coach + prompts (Anthropic API), cli
   watcher.py   one (symbol, timeframe) worker
   __main__.py  entrypoint
 tests/         algorithm tests on synthetic data

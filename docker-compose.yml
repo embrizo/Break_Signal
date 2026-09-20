@@ -1,18 +1,31 @@
 services:
   break-signal:
-    build: .
+    build:
+      context: .
+      args:
+        # 1 → install the anthropic SDK for /ask, /review and report narratives.
+        AI_ENABLED: ${AI_ENABLED:-0}
     image: break-signal:latest
     container_name: break-signal
     restart: unless-stopped
     volumes:
       # Secrets stay on the host, never in the image.
       - ./config.yaml:/app/config.yaml:ro
-      # Persist SQLite state across restarts. On a Pi, point ./data at an
-      # SSD/USB mount rather than the SD card to avoid flash wear.
+      # One volume holds everything that must survive a rebuild:
+      #   data/state.db               alert dedupe state
+      #   data/journal.db             the trade journal (+ -wal/-shm)
+      #   data/journal/screenshots/   photos sent to the Telegram bot
+      #   data/backups/               nightly journal-<stamp>.db + .md
+      # On a Pi, point ./data at an SSD/USB mount rather than the SD card.
       - ./data:/app/data
     environment:
-      # Keep the state db on the mounted volume.
       - BREAK_SIGNAL_CONFIG=/app/config.yaml
+      # Passed through from the host shell / a .env file next to this compose
+      # file; empty values are ignored by the app.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Regional OKX hosts if the defaults are geo-blocked where the Pi lives.
+      - OKX_REST_URL=${OKX_REST_URL:-https://www.okx.com}
+      - OKX_WS_URL=${OKX_WS_URL:-wss://ws.okx.com:8443/ws/v5/business}
     # No ports exposed — this is an outbound-only worker.
     logging:
       driver: json-file

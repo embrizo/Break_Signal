@@ -6,7 +6,7 @@ the system fires a breakout → you take (or skip) the trade → you log the res
 "should I take this?", answers with price-action suggestions grounded in **your own
 trades**, not generic advice.
 
-**Status:** J0–J4 code done (2026-09-20) → live checks (API key, Telegram, OKX), then J5 (Pi deploy)
+**Status:** J0–J5 code done (2026-09-20). Remaining: live checks (API key, Telegram, OKX) and the actual Pi deploy. J6 optional.
 **Date:** 2026-09-20
 **Source docs:** `IMPLEMENTATION_PLAN.md` (Break Signal, Phases 1–2 built),
 `trading_journal_implementation_plan_AI_extended.md` (journal + AI concept, analysed in §1)
@@ -540,13 +540,22 @@ with real numbers from your journal and a live OKX snapshot. (Journal half ✔; 
       when a LOSS was declared on a +R exit (gross loss turned negative) → PF now sums only sign-matching R.
 ```
 
-### Phase J5 — Pi deployment + hardening (1 day)
+### Phase J5 — Pi deployment + hardening (1 day) — DONE 2026-09-20 (not yet deployed)
 
 ```
-[ ] docker-compose: mount data/journal.db + screenshots; nightly sqlite .backup to data/backups/
-[ ] Optional extra [ai] in pyproject; Dockerfile installs it only when AI_ENABLED=1
-[ ] Journal export to markdown (journal export --md) so the history is readable without any tooling
-[ ] Update Claude_HANDOFF.md and README
+[x] docker-compose: the single ./data volume now documents state.db, journal.db, journal/screenshots/,
+      backups/; env passthrough for ANTHROPIC_API_KEY, OKX_REST_URL, OKX_WS_URL; build arg AI_ENABLED.
+      `docker compose config` validates.
+[x] journal/backup.py: online sqlite3 backup() → data/backups/journal-<YYYYMMDD-HHMM>.db (+ .md twin via
+      export.to_markdown), snapshot forced to journal_mode=DELETE so it is ONE file, prune to backup_keep,
+      verify() integrity + row counts. In-process daily scheduler (journal.backup_time, default 00:05 UTC)
+      wired in __main__; CLI `journal backup [--dir --keep | --verify file]`. Run for real on data/journal.db.
+[x] Optional AI deps: requirements-ai.txt (anthropic, mcp) installed only with --build-arg AI_ENABLED=1;
+      pyproject extra [ai] (J1) for local installs.
+[x] Markdown export existed since J0; moved into journal/export.py (md/csv/json) so backup and CLI share it.
+[x] README deploy section, handoff, this plan.
+[ ] Deploy: on the Pi, `docker compose up -d --build`, then check `docker compose logs` for
+      "Starting N watcher(s) + telegram bot + report scheduler + nightly backup".
 ```
 
 ### Phase J6 — Optional later
@@ -721,8 +730,12 @@ never imports `journal`.
 
 ## 11. Next action
 
-J0–J4 code is done. Next: (1) live checks — `ANTHROPIC_API_KEY` + `python -m pytest tests/evals -q`,
-`journal ask …`, `journal report --narrative`; Telegram bot with a real token + your chat id; OKX from a
-machine/VPN where it resolves (`market_snapshot`, watcher); (2) **J5** — docker-compose mounts for
-`journal.db` + screenshots, nightly `.backup`, `[ai]` extra in the Dockerfile behind `AI_ENABLED`,
-README/handoff refresh.
+All planned code (J0–J5) is done. What's left is operational and needs things this dev box doesn't have:
+
+1. `ANTHROPIC_API_KEY` → `python -m pytest tests/evals -q`, `journal ask "…"`, `journal report --narrative`.
+2. Telegram: `config.yaml` with the bot token + your chat id in `telegram_bot.allowed_chat_ids` → run the
+   service, send `/help`, `/trade …`, `/report`.
+3. OKX reachable (VPN or the Pi's network) → `market_snapshot` in Claude Code, and the watcher's live path.
+4. Pi: `AI_ENABLED=1 docker compose up -d --build`, watch the logs, wait for the first alert with a 📒 footer.
+
+Then J6 items as wanted (screenshot vision review, embeddings, web dashboard, Pine webhook).
