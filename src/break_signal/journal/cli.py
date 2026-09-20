@@ -285,7 +285,8 @@ def cmd_review(db: JournalDB, args, tools: Tools) -> int:
     import asyncio
     from .coach import CoachError, format_review
     try:
-        r = asyncio.run(_coach(tools).review(args.trade_id, store=not args.no_store))
+        r = asyncio.run(_coach(tools).review(args.trade_id, store=not args.no_store,
+                                             with_images=not args.no_images))
     except CoachError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
@@ -478,6 +479,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("trade_id", type=int)
     p.add_argument("--json", action="store_true")
     p.add_argument("--no-store", action="store_true")
+    p.add_argument("--no-images", action="store_true", help="don't attach the trade's screenshots")
     p.set_defaults(fn=cmd_review)
 
     p = sub.add_parser("report", help="weekly/monthly review (metrics; --narrative adds AI notes)")

@@ -167,18 +167,59 @@ def test_missing_credentials_is_a_clean_error(tools, monkeypatch):
 
 
 # ── /review ──────────────────────────────────────────────────────────────────
+_REVIEW = {"facts": ["LONG SOL 4H, exit 120 (#1)"], "metrics": ["R 2.0", "same setup n=2"],
+           "rule_violations": [], "observations": ["held to target"], "chart_observations": [],
+           "questions": ["was there a retest?"]}
+
+
 def test_review_structured_and_stored(tools):
-    fake = FakeClient(review={"facts": ["LONG SOL 4H, exit 120 (#1)"], "metrics": ["R 2.0", "same setup n=2"],
-                              "rule_violations": [], "observations": ["held to target"],
-                              "questions": ["was there a retest?"]})
+    fake = FakeClient(review=_REVIEW)
     coach = C.Coach(tools, AiCfg(), client=fake)
     r = asyncio.run(coach.review(1))
     assert r["trade_id"] == 1 and r["facts"] and r["prompt_version"] == "review_v1"
-    assert r["unverified_numbers"] == []
+    assert r["unverified_numbers"] == [] and r["images_used"] == [] and r["images_skipped"] == []
     kw = fake.calls[0]
     assert kw["system"][0]["text"].startswith("You are reviewing ONE closed trade")
-    assert "REVIEW CONTEXT" in kw["messages"][0]["content"]
-    row = tools.db.conn.execute("SELECT trade_id, kind FROM ai_analysis").fetchone()
-    assert (row["trade_id"], row["kind"]) == (1, "review")
-    assert "Review of trade #1" in C.format_review(r)
+    assert "No chart screenshots" in kw["system"][0]["text"]
+    content = kw["messages"][0]["content"]
+    assert len(content) == 1 and content[0]["type"] == "text" and "REVIEW CONTEXT" in content[0]["text"]
+    rows = tools.db.conn.execute("SELECT trade_id, kind FROM ai_analysis").fetchall()
+    assert [(r_["trade_id"], r_["kind"]) for r_ in rows] == [(1, "review")]     # no vision row
+    assert "Review of trade #1" in C.format_review(r) and "CHART" not in C.format_review(r)
     assert "error" in asyncio.run(coach.review(999))
+
+
+def test_review_attaches_screenshots_as_images(tools, tmp_path):
+    pre = tmp_path / "1_PRE.png"; pre.write_bytes(b"\x89PNG\r\n\x1a\nfakepng")
+    post = tmp_path / "1_POST.jpg"; post.write_bytes(b"\xff\xd8fakejpg")
+    big = tmp_path / "1_POST_big.png"; big.write_bytes(b"\x89PNG" + b"0" * (C.MAX_IMAGE_BYTES + 1))
+    tools.add_screenshot(1, "POST", str(post))          # POST registered first — must still come after PRE
+    tools.add_screenshot(1, "PRE", str(pre))
+    tools.add_screenshot(1, "POST", str(big))
+    tools.add_screenshot(1, "POST", str(tmp_path / "missing.png"))
+    tools.add_screenshot(1, "PRE", str(tmp_path / "notes.txt"))
+    fake = FakeClient(review={**_REVIEW, "chart_observations": ["POST chart shows a close back below the line"]})
+    coach = C.Coach(tools, AiCfg(), client=fake)
+    r = asyncio.run(coach.review(1))
+    assert r["images_used"] == ["1_PRE.png", "1_POST.jpg"]
+    assert any("over 5 MB" in s for s in r["images_skipped"])
+    assert any("file missing" in s for s in r["images_skipped"])
+    assert any("unsupported type" in s for s in r["images_skipped"])
+    content = fake.calls[0]["messages"][0]["content"]
+    types = [c["type"] for c in content]
+    assert types == ["text", "image", "text", "image", "text"]          # label, image, ..., context last
+    assert content[1]["source"]["media_type"] == "image/png" and content[3]["source"]["media_type"] == "image/jpeg"
+    import base64
+    assert base64.b64decode(content[1]["source"]["data"]).startswith(b"\x89PNG")
+    assert "PRE" in content[0]["text"] and "POST" in content[2]["text"]
+    assert "chart_observations" in fake.calls[0]["system"][0]["text"]
+    kinds = [row["kind"] for row in tools.db.conn.execute("SELECT kind FROM ai_analysis ORDER BY id")]
+    assert kinds == ["review", "vision"]
+    vision = tools.db.conn.execute("SELECT input_metrics, output FROM ai_analysis WHERE kind='vision'").fetchone()
+    assert '"label": "observation"' in vision["input_metrics"] and "below the line" in vision["output"]
+    txt = C.format_review(r)
+    assert "CHART (observations, not facts)" in txt and "screenshots skipped" in txt
+    # opt out
+    fake2 = FakeClient(review=_REVIEW)
+    asyncio.run(C.Coach(tools, AiCfg(), client=fake2).review(1, with_images=False, store=False))
+    assert [c["type"] for c in fake2.calls[0]["messages"][0]["content"]] == ["text"]

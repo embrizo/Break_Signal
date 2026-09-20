@@ -356,8 +356,13 @@ class Coach:
         return ans
 
     # ── /review ─────────────────────────────────────────────────────────
-    async def review(self, trade_id: int, store: bool = True) -> dict:
-        """Structured post-trade review from the pre-assembled review context."""
+    async def review(self, trade_id: int, store: bool = True, with_images: bool = True) -> dict:
+        """Structured post-trade review from the pre-assembled review context.
+
+        With ``with_images`` the trade's PRE/POST screenshots (from ``/shot``)
+        are attached as image blocks; whatever the model reads off a chart comes
+        back in ``chart_observations`` and is stored separately as
+        ``ai_analysis.kind='vision'`` — an observation, never a fact."""
         from pydantic import BaseModel
 
         class Review(BaseModel):
@@ -365,18 +370,28 @@ class Coach:
             metrics: list[str]
             rule_violations: list[str]
             observations: list[str]
+            chart_observations: list[str]
             questions: list[str]
 
         ctx = self.tools.review_context(trade_id)
         if "error" in ctx:
             return ctx
+        images, skipped = ([], []) if not with_images else load_screenshots(ctx["trade"].get("screenshots", []))
+        content: list[dict] = []
+        for img in images:
+            content.append({"type": "text", "text": f"Chart screenshot — {img['phase']} ({img['name']}):"})
+            content.append({"type": "image", "source": {"type": "base64", "media_type": img["media_type"],
+                                                        "data": img["data"]}})
+        content.append({"type": "text", "text": "REVIEW CONTEXT (JSON):\n" + json.dumps(ctx, ensure_ascii=False)})
+        system = prompts.REVIEW_V1 + (("\n\n" + prompts.REVIEW_VISION_ADDENDUM) if images else
+                                      "\n\nNo chart screenshots were provided; leave chart_observations empty.")
         try:
             resp = await self.client.messages.parse(
                 model=self.cfg.model,
                 max_tokens=self.cfg.max_tokens,
                 thinking={"type": "adaptive"},
-                system=[{"type": "text", "text": prompts.REVIEW_V1, "cache_control": {"type": "ephemeral"}}],
-                messages=[{"role": "user", "content": "REVIEW CONTEXT (JSON):\n" + json.dumps(ctx, ensure_ascii=False)}],
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": content}],
                 output_format=Review,
             )
         except Exception as e:  # noqa: BLE001
@@ -386,12 +401,19 @@ class Coach:
         out["trade_id"] = trade_id
         out["model"] = self.cfg.model
         out["prompt_version"] = prompts.REVIEW_VERSION
+        out["images_used"] = [i["name"] for i in images]
+        out["images_skipped"] = skipped
         out["unverified_numbers"] = parity_check(
             " ".join(sum((out.get(k, []) for k in ("facts", "metrics", "observations")), [])),
             [ToolCall("journal_review_context", {"trade_id": trade_id}, ctx)])
         if store and "error" not in out:
             out["analysis_id"] = self._store("review", trade_id, self.cfg.model, prompts.REVIEW_VERSION,
                                              ctx, json.dumps(out, ensure_ascii=False))
+            if images and out.get("chart_observations"):
+                out["vision_analysis_id"] = self._store(
+                    "vision", trade_id, self.cfg.model, prompts.REVIEW_VERSION,
+                    {"images": out["images_used"], "label": "observation"},
+                    json.dumps(out["chart_observations"], ensure_ascii=False))
         return out
 
 
@@ -413,6 +435,41 @@ class Coach:
         return text, parity_check(text, [ToolCall("metrics", {}, payload)])
 
 
+_IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".webp": "image/webp", ".gif": "image/gif"}
+MAX_IMAGE_BYTES = 5 * 1024 * 1024      # API limit per image
+MAX_IMAGES = 4
+
+
+def load_screenshots(shots: list[dict]) -> tuple[list[dict], list[str]]:
+    """Read a trade's screenshot files as base64 image blocks. PRE first, then
+    POST; unsupported types, missing or oversized files are reported, not sent."""
+    import base64
+    from pathlib import Path
+
+    images: list[dict] = []
+    skipped: list[str] = []
+    order = {"PRE": 0, "POST": 1}
+    for s in sorted(shots, key=lambda s: order.get(s.get("phase", ""), 2)):
+        p = Path(s["path"])
+        mt = _IMAGE_TYPES.get(p.suffix.lower())
+        if mt is None:
+            skipped.append(f"{p.name}: unsupported type")
+            continue
+        if not p.exists():
+            skipped.append(f"{p.name}: file missing")
+            continue
+        if p.stat().st_size > MAX_IMAGE_BYTES:
+            skipped.append(f"{p.name}: over {MAX_IMAGE_BYTES // (1024 * 1024)} MB")
+            continue
+        if len(images) >= MAX_IMAGES:
+            skipped.append(f"{p.name}: more than {MAX_IMAGES} images")
+            continue
+        images.append({"phase": s.get("phase", "?"), "name": p.name, "media_type": mt,
+                       "data": base64.standard_b64encode(p.read_bytes()).decode("ascii")})
+    return images, skipped
+
+
 def _usage(msg: Any) -> dict:
     u = getattr(msg, "usage", None)
     if u is None:
@@ -427,9 +484,14 @@ def format_review(r: dict) -> str:
         return f"review failed: {r['error']}"
     parts = [f"Review of trade #{r['trade_id']}"]
     for key, title in (("facts", "FACTS"), ("metrics", "METRICS"), ("rule_violations", "RULE VIOLATIONS"),
-                       ("observations", "OBSERVATIONS"), ("questions", "QUESTIONS")):
+                       ("observations", "OBSERVATIONS"), ("chart_observations", "CHART (observations, not facts)"),
+                       ("questions", "QUESTIONS")):
         items = r.get(key) or []
+        if key == "chart_observations" and not items:
+            continue
         parts.append(f"\n{title}\n" + ("\n".join(f"• {x}" for x in items) if items else "• none"))
+    if r.get("images_skipped"):
+        parts.append(f"\n(screenshots skipped: {'; '.join(r['images_skipped'])})")
     if r.get("unverified_numbers"):
         parts.append(f"\n⚠ numbers not found in the input: {', '.join(r['unverified_numbers'])}")
     return "\n".join(parts)

@@ -50,6 +50,12 @@ rule check), OBSERVATIONS (your reading — observations, not verdicts, no perso
 judgements) and QUESTIONS (what you would ask the trader to learn more).
 - Cite trade ids. Be specific and short; the trader reads this on a phone."""
 
+REVIEW_VISION_ADDENDUM = """The user message also contains the trader's own chart screenshots, labelled PRE \
+(before entry) and POST (after exit). Whatever you read off them — structure, where price sat \
+relative to the line, wicks, volume bars, what happened after — goes ONLY into chart_observations, \
+phrased as observations ("the POST chart shows price closing back below the line two bars later"), \
+never as facts and never with numbers you are reading off axes. If a screenshot is unclear, say so."""
+
 WEEKLY_VERSION = "weekly_v1"
 WEEKLY_V1 = """You write a short weekly review for one trader from pre-computed journal \
 statistics. Quote numbers verbatim with n. Observations, not verdicts. Under 1500 characters. \
