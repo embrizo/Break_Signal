@@ -32,3 +32,4 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["live: calls the real Anthropic API (needs ANTHROPIC_API_KEY, costs money)"]

@@ -40,6 +40,24 @@ class JournalCfg(BaseModel):
     account_size: float | None = None   # enables risk_pct from risk_amount
 
 
+class TelegramBotCfg(BaseModel):
+    """Command handling (/trade /close /ask …) — separate from alert sending."""
+    enabled: bool = False
+    allowed_chat_ids: list[str] = Field(default_factory=list)   # only these may write
+    poll_timeout: int = 30                                       # getUpdates long-poll seconds
+
+
+class AiCfg(BaseModel):
+    enabled: bool = False
+    model: str = "claude-opus-5"
+    max_tokens: int = 16000
+    max_tool_calls: int = 8          # tool-runner iterations per /ask
+    daily_ask_limit: int = 30
+    weekly_report: bool = True
+    weekly_report_cron: str = "MON 00:15"   # UTC
+    api_key: str = ""                # empty → ANTHROPIC_API_KEY from the environment
+
+
 class Config(BaseModel):
     exchange: str = "okx"
     watches: list[Watch]
@@ -51,6 +69,8 @@ class Config(BaseModel):
     state_db: str = "state.db"
     log_level: str = "INFO"
     journal: JournalCfg = Field(default_factory=JournalCfg)
+    telegram_bot: TelegramBotCfg = Field(default_factory=TelegramBotCfg)
+    ai: AiCfg = Field(default_factory=AiCfg)
 
     def to_params(self) -> Params:
         # Only pass keys Params knows about, so extra yaml keys don't crash startup.

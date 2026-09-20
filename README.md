@@ -114,6 +114,28 @@ conditional price-action to watch — never "buy" or "sell" — and it asks befo
 writing to the journal. `market_snapshot` needs OKX reachable (`OKX_REST_URL`
 env to switch host if geo-blocked).
 
+### Telegram bot + AI coach on the phone
+
+Same bot token as the alerts. In `config.yaml` set `telegram_bot.enabled: true` and
+put your chat id in `allowed_chat_ids` (nobody else can talk to it), then run the
+service as usual — the bot polls alongside the watchers.
+
+```
+/trade SOL 4H long 231.5 sl 225 tp 245 #breakout #retest -- clean retest
+/close 12 244 hit TP, held the plan #hit_tp
+/skip 118 not at desk          /event 12 sl_moved from=225 to=222
+/list 30d   /show 12   /stats   /signals   /tags   /rules
+/ask SOL just broke the 1D resistance, RSI 68 — what does my history say?
+/review 12
+```
+
+`/ask` and `/review` need `ai.enabled: true` and `ANTHROPIC_API_KEY` (or
+`ai.api_key`) plus `pip install -e .[ai]`. The coach only has **read-only** tools —
+it can never log or edit a trade — and every answer is stored in `ai_analysis`
+with the model, prompt version and the exact tool results it saw. Numbers in a
+reply that don't appear in any tool result are flagged with ⚠. Try it without
+Telegram: `python -m break_signal.journal ask "how are my 4H breaks?"`.
+
 ## Tests
 
 ```bash
@@ -142,10 +164,11 @@ pine/break_signal.pine        TradingView Pine v6 indicator (Phase 1)
 src/break_signal/
   core/        pivots, trendline, breakout, engine, indicators, state
   data/        okx_rest (backfill), okx_ws (live stream)
-  notify/      telegram, discord
+  notify/      telegram, discord (alerts); telegram_bot (commands + /ask)
   render/      mplfinance chart snapshot
   backtest/    offline replay -> CSV
-  journal/     trade journal: db, parser, analytics, rules, similar, tools, mcp_server, cli
+  journal/     trade journal: db, parser, analytics, rules, similar, footer, tools,
+               mcp_server (Claude Code), coach + prompts (Anthropic API), cli
   watcher.py   one (symbol, timeframe) worker
   __main__.py  entrypoint
 tests/         algorithm tests on synthetic data

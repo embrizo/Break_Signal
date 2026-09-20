@@ -6,7 +6,7 @@ the system fires a breakout → you take (or skip) the trade → you log the res
 "should I take this?", answers with price-action suggestions grounded in **your own
 trades**, not generic advice.
 
-**Status:** J0 + J1 + J2 done (2026-09-20) → J1 chat smoke test, then J3
+**Status:** J0–J3 code done (2026-09-20) → live checks (API key, Telegram), then J4
 **Date:** 2026-09-20
 **Source docs:** `IMPLEMENTATION_PLAN.md` (Break Signal, Phases 1–2 built),
 `trading_journal_implementation_plan_AI_extended.md` (journal + AI concept, analysed in §1)
@@ -486,22 +486,30 @@ with real numbers from your journal and a live OKX snapshot. (Journal half ✔; 
 [x] tests/test_signal_linkage.py (7 tests; 128 total pass)
 ```
 
-### Phase J3 — Telegram bot + Claude API coach (2 days)
+### Phase J3 — Telegram bot + Claude API coach (2 days) — CODE DONE 2026-09-20, live run pending
 
 ```
-[ ] notify/telegram_bot.py — getUpdates long-poll task inside __main__; auth by chat_id allowlist
-      commands: /trade /close /skip /event /tag /list /show /stats /tags /ask /review /shot (photo → screenshots table)
-[ ] journal/coach.py — Anthropic SDK:
-      model "claude-opus-5", thinking {"type":"adaptive"}, streaming with .get_final_message(),
-      client.beta.messages.tool_runner with @beta_tool wrappers around tools.py (read-only tools only —
-      writes stay on explicit /trade /close commands so the LLM never modifies the journal unasked),
-      system prompt = prompts.COACH_V1 with cache_control ephemeral (stable prefix), user question last
-[ ] /review <trade_id> → REVIEW_V1: structured output {facts, metrics, rule_violations, observations, questions}
-      stored in ai_analysis
-[ ] config.py: journal: {db: data/journal.db, screenshots_dir: ...}; ai: {enabled, model, max_tokens, allowed_chat_ids}
-      ANTHROPIC_API_KEY from env / config.yaml (gitignored already)
-[ ] Evaluation cases (source doc §23): extraction test, no-hallucination test (missing SL stays null),
-      analytics-parity test (LLM answer must quote analytics numbers verbatim), rule test
+[x] notify/telegram_bot.py — getUpdates long-poll task inside __main__ (build_telegram_bot); chat_id allowlist;
+      commands: /trade /close /skip /event /tag /tags /rules /list /show /stats /signals /ask /review /shot
+      (photo caption "/shot <id> pre|post" → screenshots dir + table). handle_command() is pure → unit-tested.
+[x] journal/coach.py — Anthropic SDK 1.7 (AsyncAnthropic): claude-opus-5, thinking adaptive,
+      client.beta.messages.tool_runner(max_iterations=ai.max_tool_calls) with @beta_async_tool wrappers over the
+      READ-ONLY Tools methods (11 tools; no add/close/skip/update), system = prompts.COACH_V1 with cache_control
+      ephemeral, question (+ optional signal JSON) last. Non-streaming at max_tokens 16000.
+[x] parity_check(): deterministic guard — numbers in the reply not present in any tool result are listed as
+      `unverified_numbers` (shown as ⚠ on Telegram/CLI, stored with the answer). Heuristic, warning only.
+[x] /review <id> → client.messages.parse(output_format=Review pydantic) over tools.review_context(); REVIEW_V1;
+      stored in ai_analysis(kind='review'); format_review() for Telegram
+[x] Every /ask stored in ai_analysis(kind='suggestion') with model, prompt_version, question, tool calls + results,
+      usage. Daily budget = count of today's 'suggestion' rows vs ai.daily_ask_limit (store=False bypasses).
+[x] config: telegram_bot {enabled, allowed_chat_ids, poll_timeout}; ai {enabled, model, max_tokens, max_tool_calls,
+      daily_ask_limit, weekly_report, weekly_report_cron, api_key}; prompts.py versioned (coach_v1, review_v1, weekly_v1)
+[x] CLI: journal ask "<q>", journal review <id> — try the coach without Telegram
+[x] tests/test_coach.py (fake client; 10 tests), tests/test_telegram_bot.py (7), tests/evals/test_coach_live.py
+      (3 live cases: parity + no-directive, empty-journal no-hallucination, rule surfaced — skipped without
+      ANTHROPIC_API_KEY, marker `live`). 154 pass. "Extraction test" lives in test_parser (deterministic parser).
+[ ] Live: set ANTHROPIC_API_KEY, run `python -m pytest tests/evals -q` and `journal ask "how are my 4H breaks?"`
+[ ] Live: config.yaml with telegram_bot.enabled + allowed_chat_ids → `python -m break_signal -c config.yaml`, send /help
 ```
 
 ### Phase J4 — Rules, weekly review, coach memory (2 days)
@@ -696,7 +704,8 @@ never imports `journal`.
 
 ## 11. Next action
 
-J0–J2 are done. Next: (1) restart Claude Code in this repo so `.mcp.json` loads and try
-"what's my win rate on 4H breaks?"; (2) **J3** — Telegram command bot (`/trade /close /skip
-/ask …`) + `coach.py` (Anthropic SDK tool runner over the read-only tools). Needs
-`pip install anthropic` and an `ANTHROPIC_API_KEY`; the bot part needs the Telegram token.
+J0–J3 code is done. Next: (1) live checks — `ANTHROPIC_API_KEY` + `python -m pytest tests/evals -q`,
+then `journal ask …`; Telegram bot with a real token + your chat id; (2) **J4** — `rules.py` is
+already in; remaining: `report.py` weekly/monthly (metrics + WEEKLY_V1 narrative, Telegram push,
+`--dry-run`), `memory.py` evidence-backed observations + `/memories /confirm /forget`, equity-curve
+PNG on the weekly report, surfacing violations in the alert footer.

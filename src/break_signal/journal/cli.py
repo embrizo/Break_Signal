@@ -267,6 +267,37 @@ def cmd_footer(db: JournalDB, args, tools: Tools) -> int:
     return 0
 
 
+def _coach(tools: Tools):
+    from .coach import Coach
+    cfg = tools.cfg.ai if tools.cfg else None
+    return Coach(tools, cfg)
+
+
+def cmd_ask(db: JournalDB, args, tools: Tools) -> int:
+    import asyncio
+    from .coach import AskBudgetExceeded
+    coach = _coach(tools)
+    try:
+        ans = asyncio.run(coach.ask(" ".join(args.question), store=not args.no_store))
+    except AskBudgetExceeded as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    print(ans.text)
+    print(f"\n[{len(ans.tool_calls)} tool calls: {', '.join(c.name for c in ans.tool_calls) or '-'} · "
+          f"{ans.model} · {ans.prompt_version} · usage {ans.usage}]")
+    if ans.unverified_numbers:
+        print(f"⚠ numbers not found in tool results: {', '.join(ans.unverified_numbers)}")
+    return 0
+
+
+def cmd_review(db: JournalDB, args, tools: Tools) -> int:
+    import asyncio
+    from .coach import format_review
+    r = asyncio.run(_coach(tools).review(args.trade_id, store=not args.no_store))
+    print(json.dumps(r, ensure_ascii=False, indent=2) if args.json else format_review(r))
+    return 0 if "error" not in r else 1
+
+
 def cmd_stats(db: JournalDB, args, tools: Tools) -> int:
     trades = _filtered(db, args)
     label = f"period={args.period or 'all'}" + (f" symbol={args.symbol}" if args.symbol else "") \
@@ -417,6 +448,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("signal_id", type=int)
     p.set_defaults(fn=cmd_footer)
 
+    p = sub.add_parser("ask", help="ask the AI coach (needs ANTHROPIC_API_KEY)")
+    p.add_argument("question", nargs="+")
+    p.add_argument("--no-store", action="store_true", help="don't record in ai_analysis")
+    p.set_defaults(fn=cmd_ask)
+
+    p = sub.add_parser("review", help="AI post-trade review of one trade (needs ANTHROPIC_API_KEY)")
+    p.add_argument("trade_id", type=int)
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--no-store", action="store_true")
+    p.set_defaults(fn=cmd_review)
+
     p = sub.add_parser("stats", help="deterministic performance numbers")
     _add_filters(p, with_limit=False)
     p.add_argument("--by", choices=["summary", "tags", "features", "all"], default="all")
@@ -452,7 +494,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.fn(tools.db, args, tools)
     except (ParseError, ValueError, KeyError, sqlite3.IntegrityError) as e:
-        print(f"error: {e}", file=sys.stderr)
+        msg = e.args[0] if isinstance(e, KeyError) and e.args else e
+        print(f"error: {msg}", file=sys.stderr)
         return 2
     finally:
         tools.db.close()

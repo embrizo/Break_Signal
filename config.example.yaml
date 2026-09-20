@@ -63,3 +63,21 @@ journal:
     ETH: ETH-USDT-SWAP
   history_footer: true        # append "your history" to alerts when n >= 3 (phase J2)
   account_size: null          # optional; enables risk_pct auto-calc from risk_amount
+
+# ── Telegram command bot: /trade /close /skip /event /list /show /stats /ask /review ──
+# Uses channels.telegram.bot_token. Only allowed_chat_ids may write to the journal.
+telegram_bot:
+  enabled: false
+  allowed_chat_ids: []        # e.g. ["123456789"]; empty = nobody can use commands
+  poll_timeout: 30
+
+# ── AI coach (Telegram /ask and /review, weekly report). Needs the anthropic package. ──
+ai:
+  enabled: false
+  model: claude-opus-5
+  max_tokens: 16000
+  max_tool_calls: 8           # tool-runner rounds per /ask
+  daily_ask_limit: 30
+  weekly_report: true
+  weekly_report_cron: "MON 00:15"   # UTC
+  api_key: ""                 # empty → ANTHROPIC_API_KEY from the environment
