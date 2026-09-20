@@ -159,6 +159,32 @@ def test_watcher_without_journal_and_footer_off(db):
     assert "📒" not in cap2.sent[0]                  # but no footer
 
 
+def test_backfill_retries_until_data(monkeypatch):
+    import aiohttp
+    from break_signal import watcher as W
+
+    calls = {"n": 0}
+    sleeps = []
+
+    async def flaky_fetch(session, symbol, tf, limit):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise aiohttp.ClientConnectionError("dns down")
+        if calls["n"] == 2:
+            return descending_resistance(n=0, pivots=())          # empty → treated as failure
+        return _broken_series()
+
+    async def fake_sleep(s):
+        sleeps.append(s)
+
+    monkeypatch.setattr(W.okx_rest, "fetch_candles", flaky_fetch)
+    monkeypatch.setattr(W.asyncio, "sleep", fake_sleep)
+    w = Watcher(_cfg(), _cfg().watches[0], State(":memory:"), [])
+    candles = asyncio.run(w._backfill())
+    assert len(candles) > 0 and calls["n"] == 3
+    assert sleeps == [W.BACKFILL_RETRY_BASE, W.BACKFILL_RETRY_BASE * 2]   # exponential backoff
+
+
 # ── replay → journal and CSV import ──────────────────────────────────────────
 def test_replay_signals_to_journal(tmp_path):
     c = _broken_series()

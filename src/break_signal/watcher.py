@@ -21,6 +21,9 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+BACKFILL_RETRY_BASE = 5      # seconds; doubles each failure
+BACKFILL_RETRY_MAX = 300
+
 
 class Watcher:
     def __init__(self, cfg: Config, watch: Watch, state: State, notifiers: list[Notifier],
@@ -43,10 +46,7 @@ class Watcher:
         self.candles: Candles | None = None
 
     async def run(self) -> None:
-        async with aiohttp.ClientSession() as session:
-            self.candles = await okx_rest.fetch_candles(
-                session, self.symbol, self.tf, self.cfg.backfill
-            )
+        self.candles = await self._backfill()
         log.info("%s %s: backfilled %d candles", self.symbol, self.tf, len(self.candles))
 
         # Prime state so historical breaks in the backfill don't fire on startup.
@@ -60,6 +60,30 @@ class Watcher:
                 log.exception("%s %s: error processing candle", self.symbol, self.tf)
 
     # ── internals ───────────────────────────────────────────────────────
+    async def _backfill(self) -> Candles:
+        """Fetch the startup candles, retrying forever with capped backoff.
+
+        A Pi that boots before its network is up must not lose its alert bot
+        for good; the WebSocket layer already reconnects, so the REST backfill
+        gets the same treatment. An empty response counts as a failure too."""
+        delay = BACKFILL_RETRY_BASE
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                async with aiohttp.ClientSession() as session:
+                    candles = await okx_rest.fetch_candles(
+                        session, self.symbol, self.tf, self.cfg.backfill
+                    )
+                if len(candles) == 0:
+                    raise RuntimeError("no candles returned")
+                return candles
+            except (aiohttp.ClientError, asyncio.TimeoutError, OSError, RuntimeError) as e:
+                log.warning("%s %s: backfill attempt %d failed (%s: %s); retrying in %ds",
+                            self.symbol, self.tf, attempt, e.__class__.__name__, e, delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, BACKFILL_RETRY_MAX)
+
     def _prime_broken(self) -> None:
         """Run the engine over the backfill and record any already-broken lines,
         so a fresh start does not alert on breaks that happened in the past."""
