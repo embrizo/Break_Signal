@@ -60,6 +60,30 @@ python -m break_signal.backtest.replay --symbol SOL-USDT-SWAP --tf 1D --limit 50
 Walks a growing window so each bar sees only past data — no look-ahead, same
 pivot-confirmation lag as live.
 
+## Trade journal
+
+Log what you did with each alert and *why*, so the numbers can talk back. Stored in
+`data/journal.db` (separate from alert state). See
+[`JOURNAL_AI_IMPLEMENTATION_PLAN.md`](JOURNAL_AI_IMPLEMENTATION_PLAN.md) for the
+roadmap (AI coach in Claude Code, Telegram commands, alert footers).
+
+```bash
+# one-line syntax: <SYM> [<tf>] long|short <entry> [sl x] [tp x] [size x] [risk x[%]] [#tags] [-- reason]
+python -m break_signal.journal add "SOL 4H long 231.5 sl 225 tp 245 #breakout #retest -- clean retest"
+python -m break_signal.journal close "1 244 win hit TP, held the plan #hit_tp"
+python -m break_signal.journal event 1 sl_moved from=225 to=222
+python -m break_signal.journal list --period 30d
+python -m break_signal.journal show 1
+python -m break_signal.journal stats --by tags        # win rate, PF, avg R, drawdown, per-tag
+python -m break_signal.journal export --format md --out journal.md
+python -m break_signal.journal tag list
+```
+
+Quote the whole line (PowerShell eats bare `--` and splits on commas otherwise).
+R-multiple, PnL and every statistic are computed by `journal/analytics.py`; you
+never type them. Anything you don't say is stored as NULL, not guessed. Tags are
+free-form (Thai works) and unknown ones are created on the fly.
+
 ## Tests
 
 ```bash
@@ -69,7 +93,8 @@ python -m pytest tests/ -q
 
 The core tests (`tests/test_indicators.py`, `test_pivots.py`, `test_trendline.py`,
 `test_breakout.py`) need only numpy + pytest and verify the algorithm on synthetic
-data with a known trendline.
+data with a known trendline. The journal tests (`test_journal_db.py`, `test_parser.py`,
+`test_analytics.py`) pin hand-computed golden numbers on a fixture journal.
 
 ## Notifications
 
@@ -90,6 +115,7 @@ src/break_signal/
   notify/      telegram, discord
   render/      mplfinance chart snapshot
   backtest/    offline replay -> CSV
+  journal/     trade journal: db, parser, analytics, cli
   watcher.py   one (symbol, timeframe) worker
   __main__.py  entrypoint
 tests/         algorithm tests on synthetic data

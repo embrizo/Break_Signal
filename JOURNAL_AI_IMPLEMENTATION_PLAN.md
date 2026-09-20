@@ -6,7 +6,7 @@ the system fires a breakout → you take (or skip) the trade → you log the res
 "should I take this?", answers with price-action suggestions grounded in **your own
 trades**, not generic advice.
 
-**Status:** planning
+**Status:** J0 done (2026-09-20) → next J1
 **Date:** 2026-09-20
 **Source docs:** `IMPLEMENTATION_PLAN.md` (Break Signal, Phases 1–2 built),
 `trading_journal_implementation_plan_AI_extended.md` (journal + AI concept, analysed in §1)
@@ -405,24 +405,35 @@ setups from an approved list, no entry when the 1D RSI > 75 / < 25.
 Work is ordered so that **the "AI suggestion in this chat" feature lands in the
 second phase** — it is the thing you asked for and needs no API key or Telegram work.
 
-### Phase J0 — Journal foundation (2 days)
+### Phase J0 — Journal foundation (2 days) — DONE 2026-09-20
 
 ```
-[ ] journal/db.py — schema above, WAL, migrations table, JournalDB class mirroring core/state.py style
-[ ] journal/models.py — dataclasses
-[ ] journal/parser.py — one-line syntax:
+[x] journal/db.py — schema above, WAL, migrations table, JournalDB class mirroring core/state.py style
+[x] journal/models.py — dataclasses
+[x] journal/parser.py — one-line syntax:
       "<SYM> [<tf>] long|short <entry> [sl <x>] [tp <x>] [size <x>] [risk <x>%] [#tag ...] [-- free reason]"
-      symbol aliases: SOL → SOL-USDT-SWAP (from config watches); Thai tags allowed
-[ ] journal/analytics.py — win_rate, profit_factor, expectancy, avg_r, max_drawdown, streaks,
+      symbol aliases: SOL → SOL-USDT-SWAP (from config journal.symbol_aliases); Thai tags allowed
+[x] journal/analytics.py — win_rate, profit_factor, expectancy, avg_r, max_drawdown, streaks,
       equity_curve, tag_stats(phase, period), feature_bucket_stats(rsi_band, tf, side, event)
       r_multiple = (exit-entry)/(entry-sl) signed by direction; BE if |r| < 0.1
-[ ] journal/cli.py — add, close, skip, event, tag, list, show, stats, export (csv/json/md)
-[ ] Seed tag word bank (Setup / Psych / Exit / Mistake — bilingual defaults, user extends)
-[ ] tests: test_journal_db, test_parser, test_analytics (fixture journal with hand-computed numbers)
+[x] journal/cli.py — add, close, skip, event, tag, list, show, signals, stats, export (csv/json/md)
+[x] Seed tag word bank (Setup / Psych / Exit / Mistake — bilingual defaults, user extends)
+[x] tests: test_journal_db, test_parser, test_analytics (fixture journal with hand-computed numbers) — 59 tests
+[x] config.py / config.example.yaml: `journal:` block (db, screenshots_dir, symbol_aliases, account_size)
 ```
 
+Implementation notes (J0):
+- `outcome` CHECK is `IN ('WIN','LOSS','BE')` (NULL passes CHECK by SQL semantics; the `,NULL` in §4.1 was wrong).
+- `win_rate = wins / n_closed` (BE counts in n). PF is in R. `derive_outcome` uses the ±0.1R BE band; the user's
+  stated outcome wins over the derived one but R itself is never edited.
+- Tags: `#liquidity_sweep` → "liquidity sweep" (underscore → space) so one-word chips can hit multi-word seed tags.
+  `#12` is accepted as a trade id in `close`. Unknown tags are created with category OTHER.
+- `insert_signal` accepts a `core.types.Signal` directly and derives `candle_ts` from its ISO `time`.
+- AI-side tables (`rules`, `rule_violations`, `ai_analysis`, `memories`) are created in v1 of the schema so
+  J3/J4 need no migration.
+
 **Done when:** you can log, close, and see `stats` + `tag_stats` from the CLI, and the
-golden analytics test pins the exact numbers.
+golden analytics test pins the exact numbers. ✔
 
 ### Phase J1 — AI Coach in Claude Code (this chat) (2 days)  ← the requested feature
 
@@ -654,17 +665,19 @@ never imports `journal`.
 
 ---
 
-## 10. Open questions (answer before J0 starts)
+## 10. Open questions — defaults applied for J0 (2026-09-20), revisit any time
 
-1. **Account currency and size** — do you want `risk_pct` and PnL in USDT, or R-multiples only? (R-only is simpler and enough for the AI.)
-2. **Word bank seed** — send your current tag list (Thai/English) so the seed matches how you already think; the source doc examples (`Breakout`, `Liquidity Sweep`, `FVG`, `FOMO`, `ตามวินัย`, `ชน SL`, `แหกกฎเลื่อน SL`, `Trailing Stop`) will be the default otherwise.
-3. **Where do you want to log most often** — this chat, Telegram, or both? Determines whether J3 moves ahead of J2.
-4. **Screenshots** — paste into chat (Claude reads directly) or send to the Telegram bot? Both are planned; the first one decides the J1 vs J3 order for `/shot`.
+1. **Account currency and size** — **R-multiples primary.** PnL is computed only when `size` or `risk <amount>`
+   is given; `risk_pct` auto-fills only if `journal.account_size` is set in config (default: unset).
+2. **Word bank seed** — **source-doc examples + a few common ones**, bilingual, in `db.SEED_TAGS`
+   (29 tags across SETUP / PSYCH / EXIT / MISTAKE). Rename/recategorise with `tag rename` / `tag category`.
+3. **Where do you want to log most often** — not needed for J0; J1 (chat) stays before J2/J3 as planned.
+4. **Screenshots** — not needed for J0; `screenshots` table + `add_screenshot()` exist, no capture path yet.
 
 ---
 
 ## 11. Next action
 
-Start **J0**: `journal/db.py` + `parser.py` + `analytics.py` + CLI with tests. Then **J1**
-(MCP server + `CLAUDE.md`) so the suggestion feature works in this chat before any
-Telegram or API-key work is needed.
+J0 is done. Start **J1**: `journal/tools.py` (shared JSON-safe functions over `JournalDB` +
+`analytics`), `similar.py`, `mcp_server.py`, `.mcp.json`, `CLAUDE.md` coach rules — so the
+suggestion feature works in this chat before any Telegram or API-key work is needed.

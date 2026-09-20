@@ -1,0 +1,145 @@
+"""Golden numbers on a fixture journal. Every expected value below was computed
+by hand from the fixture — if this test fails, the *analytics* changed, not the
+data."""
+import pytest
+
+from break_signal.journal import analytics as A
+from break_signal.journal.db import JournalDB
+
+# (direction, entry, sl, exit, entry_tags) → hand-computed R in the comment
+FIXTURE = [
+    ("LONG", 100, 90, 120, ["Breakout", "Retest"]),   # 1  +2.0  W
+    ("LONG", 100, 90, 90, ["Breakout", "FOMO"]),      # 2  -1.0  L
+    ("LONG", 100, 90, 115, ["Retest"]),               # 3  +1.5  W
+    ("LONG", 100, 90, 85, ["FOMO"]),                  # 4  -1.5  L
+    ("LONG", 100, 90, 100.5, ["Range"]),              # 5  +0.05 BE
+    ("SHORT", 100, 110, 80, ["Breakout"]),            # 6  +2.0  W
+    ("SHORT", 100, 110, 110, ["FOMO"]),               # 7  -1.0  L
+    ("LONG", 100, 90, 130, ["Retest"]),               # 8  +3.0  W
+    ("LONG", 100, 90, 95, ["Breakout"]),              # 9  -0.5  L
+    ("LONG", 100, 90, 92, ["FOMO"]),                  # 10 -0.8  L
+    ("LONG", 100, 90, 110, ["Retest", "Breakout"]),   # 11 +1.0  W
+]
+# Rs: 2, -1, 1.5, -1.5, .05, 2, -1, 3, -.5, -.8, 1
+# wins 5 (sum 9.5) · losses 5 (sum -4.8) · be 1 · total 4.75
+# cum: 2, 1, 2.5, 1.0, 1.05, 3.05, 2.05, 5.05, 4.55, 3.75, 4.75 → max DD 1.5 (2.5→1.0)
+# sequence W L W L BE W L W L L W → max_win 1, max_loss 2, current 1 WIN
+
+
+@pytest.fixture(scope="module")
+def trades():
+    db = JournalDB(":memory:")
+    for i, (d, e, sl, x, tags) in enumerate(FIXTURE, start=1):
+        t = db.add_trade("SOL-USDT-SWAP", d, tf="4H" if i % 2 else "1D", entry_price=e,
+                         sl_price=sl, entry_tags=tags, opened_ts=i * 1_000, ctx_rsi=40 + i * 3)
+        db.close_trade(t.id, x, closed_ts=i * 1_000 + 500,
+                       exit_tags=["Hit TP"] if x > e and d == "LONG" else [])
+    db.add_trade("SOL-USDT-SWAP", "LONG", entry_price=100, sl_price=90)  # 12: OPEN, ignored
+    out = db.list_trades()
+    db.close()
+    return out
+
+
+def test_r_multiple_arithmetic():
+    assert A.r_multiple("LONG", 100, 90, 120) == pytest.approx(2.0)
+    assert A.r_multiple("SHORT", 100, 110, 80) == pytest.approx(2.0)
+    assert A.r_multiple("SHORT", 100, 110, 115) == pytest.approx(-1.5)
+    assert A.r_multiple("LONG", 100, 100, 120) is None   # zero risk
+    assert A.r_multiple("LONG", 100, None, 120) is None
+    assert A.planned_rr("LONG", 100, 90, 125) == pytest.approx(2.5)
+
+
+def test_pnl_prefers_size_then_risk_amount():
+    assert A.pnl_amount("LONG", 100, 110, 2, None, None, 1) == pytest.approx(19)
+    assert A.pnl_amount("SHORT", 100, 110, 2, None, None, 0) == pytest.approx(-20)
+    assert A.pnl_amount("LONG", 100, 110, None, 50, 1.0, 0) == pytest.approx(50)
+    assert A.pnl_amount("LONG", 100, 110, None, None, 1.0, 0) is None
+
+
+def test_derive_outcome_threshold():
+    assert A.derive_outcome(0.5) == "WIN"
+    assert A.derive_outcome(-0.5) == "LOSS"
+    assert A.derive_outcome(0.09) == "BE"
+    assert A.derive_outcome(-0.1) == "BE"
+    assert A.derive_outcome(None) is None
+
+
+def test_bands_and_session():
+    assert [A.rsi_band(x) for x in (10, 30, 50, 70, None)] == ["<30", "30-50", "50-70", ">70", None]
+    assert [A.atr_dist_band(x) for x in (0.2, 0.7, 1.5)] == ["<0.5", "0.5-1", ">1"]
+    hour = 3_600_000
+    assert A.session_of(0) == "ASIA"
+    assert A.session_of(9 * hour) == "LONDON"
+    assert A.session_of(15 * hour) == "NY"
+    assert A.session_of(23 * hour) == "ASIA"
+
+
+def test_period_to_since():
+    now = 100 * 86_400_000
+    assert A.period_to_since("30d", now) == 70 * 86_400_000
+    assert A.period_to_since("2w", now) == 86 * 86_400_000
+    assert A.period_to_since("all", now) is None
+    assert A.period_to_since(None, now) is None
+    with pytest.raises(ValueError):
+        A.period_to_since("soon", now)
+
+
+def test_summary_golden(trades):
+    s = A.summarize(trades)
+    assert s["n"] == 11
+    assert (s["wins"], s["losses"], s["be"]) == (5, 5, 1)
+    assert s["win_rate"] == pytest.approx(5 / 11, abs=1e-3)
+    assert s["total_r"] == pytest.approx(4.75)
+    assert s["avg_r"] == pytest.approx(4.75 / 11, abs=1e-3)
+    assert s["profit_factor"] == pytest.approx(9.5 / 4.8, abs=1e-3)
+    assert s["avg_win_r"] == pytest.approx(1.9)
+    assert s["avg_loss_r"] == pytest.approx(-0.96)
+    assert s["max_drawdown_r"] == pytest.approx(1.5)
+    assert s["streaks"] == {"max_win": 1, "max_loss": 2, "current": 1, "current_kind": "WIN"}
+    assert s["total_pnl"] is None and s["pnl_n"] == 0
+
+
+def test_equity_curve_order_and_values(trades):
+    curve = A.equity_curve(trades)
+    assert [p["cum_r"] for p in curve] == pytest.approx(
+        [2, 1, 2.5, 1.0, 1.05, 3.05, 2.05, 5.05, 4.55, 3.75, 4.75])
+    assert [p["trade_id"] for p in curve] == list(range(1, 12))
+
+
+def test_empty_summary():
+    s = A.summarize([])
+    assert s["n"] == 0 and s["win_rate"] is None and s["profit_factor"] is None
+    assert s["streaks"]["current"] == 0
+
+
+def test_tag_stats_golden(trades):
+    ts = A.tag_stats(trades, "ENTRY")
+    assert list(ts)[:1] == ["Breakout"]  # largest n first
+    bo = ts["Breakout"]
+    assert bo["n"] == 5 and bo["wins"] == 3 and bo["losses"] == 2
+    assert bo["avg_r"] == pytest.approx(0.7)
+    assert bo["profit_factor"] == pytest.approx(5 / 1.5, abs=1e-3)
+    rt = ts["Retest"]
+    assert rt["n"] == 4 and rt["wins"] == 4 and rt["profit_factor"] == float("inf")
+    assert rt["avg_r"] == pytest.approx(1.875)
+    fo = ts["FOMO"]
+    assert fo["n"] == 4 and fo["losses"] == 4 and fo["profit_factor"] == 0.0
+    assert fo["avg_r"] == pytest.approx(-1.075)
+    rg = ts["Range"]
+    assert rg["n"] == 1 and rg["be"] == 1 and rg["profit_factor"] is None
+    # exit-phase tags are separate
+    assert "Hit TP" in A.tag_stats(trades, "EXIT")
+    assert "Hit TP" not in ts
+    assert A.tag_stats(trades)["Hit TP"]["n"] == 5
+
+
+def test_feature_stats_golden(trades):
+    f = A.feature_stats(trades)
+    assert f["direction"]["LONG"]["n"] == 9
+    sh = f["direction"]["SHORT"]
+    assert sh["n"] == 2 and sh["wins"] == 1 and sh["losses"] == 1
+    assert sh["avg_r"] == pytest.approx(0.5) and sh["profit_factor"] == pytest.approx(2.0)
+    assert f["tf"]["4H"]["n"] == 6 and f["tf"]["1D"]["n"] == 5
+    assert set(f["rsi_band"]) == {"30-50", "50-70", ">70"}
+    assert f["signal_linked"] == {"discretionary": A.summarize(trades)}
+    assert f["signal_side"] == {}

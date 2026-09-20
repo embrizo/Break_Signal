@@ -30,6 +30,16 @@ class Channels(BaseModel):
     discord: DiscordCfg = Field(default_factory=DiscordCfg)
 
 
+class JournalCfg(BaseModel):
+    db: str = "data/journal.db"
+    screenshots_dir: str = "data/journal/screenshots"
+    symbol_aliases: dict[str, str] = Field(default_factory=lambda: {
+        "SOL": "SOL-USDT-SWAP", "BTC": "BTC-USDT-SWAP", "ETH": "ETH-USDT-SWAP",
+    })
+    history_footer: bool = True
+    account_size: float | None = None   # enables risk_pct from risk_amount
+
+
 class Config(BaseModel):
     exchange: str = "okx"
     watches: list[Watch]
@@ -40,6 +50,7 @@ class Config(BaseModel):
     chart_bars: int = 120
     state_db: str = "state.db"
     log_level: str = "INFO"
+    journal: JournalCfg = Field(default_factory=JournalCfg)
 
     def to_params(self) -> Params:
         # Only pass keys Params knows about, so extra yaml keys don't crash startup.

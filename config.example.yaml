@@ -52,3 +52,14 @@ chart_bars: 120               # candles shown in the snapshot
 state_db: data/state.db       # SQLite path; the ./data dir is the mounted Docker volume
                               # (on a Pi, back ./data with an SSD/USB, not the SD card)
 log_level: INFO
+
+# ── Trade journal (python -m break_signal.journal ...) ──
+journal:
+  db: data/journal.db         # separate file from state.db
+  screenshots_dir: data/journal/screenshots
+  symbol_aliases:             # "SOL" in a /trade line -> OKX instId
+    SOL: SOL-USDT-SWAP
+    BTC: BTC-USDT-SWAP
+    ETH: ETH-USDT-SWAP
+  history_footer: true        # append "your history" to alerts when n >= 3 (phase J2)
+  account_size: null          # optional; enables risk_pct auto-calc from risk_amount

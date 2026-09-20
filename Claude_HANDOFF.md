@@ -50,7 +50,8 @@ Full spec: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) — algorithm (§2
 - **`data/`** — written 2026-09-07: [okx_rest.py](src/break_signal/data/okx_rest.py) (paged backfill: `/candles` then `/history-candles` with `after`, confirmed bars only, reversed to oldest-first) + [okx_ws.py](src/break_signal/data/okx_ws.py) (live `wss://ws.okx.com:8443/ws/v5/business` stream, text `ping`/`pong` heartbeat after 20s idle, reconnect w/ backoff, yields only `confirm=="1"` candles). REST verified live; WS not yet run live. Override hosts via `OKX_REST_URL` / `OKX_WS_URL` env for geo-block fallback.
 - **`notify/`** — [base.py](src/break_signal/notify/base.py) protocol + [telegram.py](src/break_signal/notify/telegram.py) + [discord.py](src/break_signal/notify/discord.py); failures isolated per channel.
 - **`render/`** — [chart.py](src/break_signal/render/chart.py): mplfinance snapshot with lines drawn.
-- **`backtest/`** — [replay.py](src/break_signal/backtest/replay.py): growing-window replay → CSV (imports `data/`, so currently broken).
+- **`backtest/`** — [replay.py](src/break_signal/backtest/replay.py): growing-window replay → CSV.
+- **`journal/`** — added 2026-09-20 (plan phase J0): [db.py](src/break_signal/journal/db.py) (`JournalDB`, SQLite WAL, separate `data/journal.db`, seed word bank), [models.py](src/break_signal/journal/models.py), [parser.py](src/break_signal/journal/parser.py) (one-line trade/close syntax), [analytics.py](src/break_signal/journal/analytics.py) (**the only place metrics are computed**), [cli.py](src/break_signal/journal/cli.py) (`python -m break_signal.journal …`). Spec: [`JOURNAL_AI_IMPLEMENTATION_PLAN.md`](JOURNAL_AI_IMPLEMENTATION_PLAN.md).
 - **[watcher.py](src/break_signal/watcher.py)** — one (symbol, timeframe) async worker; **[__main__.py](src/break_signal/__main__.py)** — entrypoint / asyncio runner.
 
 ## Locked decisions
@@ -68,12 +69,18 @@ Full spec: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) — algorithm (§2
 - **Line id** is keyed on pivot open-time (ms): `f"{side}:{ts_a}:{ts_b}"`, not bar index — stable across restarts. (Pine uses `bar_index`; intentional divergence.)
 - **OKX candles are newest-first**; reverse before processing. Last array element is `"1"` when the bar is confirmed — only act on confirmed bars. History beyond ~100 bars: `/api/v5/market/history-candles`.
 - **Multi-scale pivots (Session 4).** Detection now merges a coarse (`pivot_len`) and a fine (`pivot_len_fine=3`) fractal scale so consolidation trendlines across minor swings are caught. Merged set is deduped + capped at `max_pivots` so loop bounds are unchanged. Pair building orders anchors explicitly (merged pivots aren't sorted). Toggle: `use_fine_pivots`. Keep Pine `mergeP`/`touchGap` in exact parity with `pivots.merge_pivots` + `engine.touch_gap`.
+- **Journal rules (Session 5).** `journal/analytics.py` is the only place R / PnL / stats are computed; `db.close_trade` calls it and caches `r_multiple`/`pnl_amount` on the row. Missing user input stays NULL — never inferred. `journal` imports `core` (for `Signal`); `core` must never import `journal`. Test fixture in `tests/test_analytics.py` has hand-computed golden numbers — if it fails, analytics changed, not the data.
 
 ## Quick run commands
 
 ```bash
-# Core algorithm tests — pass today, need only numpy + pytest
+# All tests (core + journal) — need only numpy + pytest; 81 pass
 python -m pytest tests/ -q
+
+# Journal (no deps beyond stdlib + pydantic/yaml for config)
+python -m break_signal.journal add "SOL 4H long 231.5 sl 225 tp 245 #breakout -- clean retest"
+python -m break_signal.journal close "1 244 win hit TP #hit_tp"
+python -m break_signal.journal stats
 
 # Backtest replay — works, no secrets needed (verified live 2026-09-07)
 python -m break_signal.backtest.replay --symbol SOL-USDT-SWAP --tf 1D --limit 500 --out signals.csv
@@ -112,7 +119,7 @@ docker compose up -d --build
 
 ## Next steps
 
-0. **Journal + AI coach** — follow [`JOURNAL_AI_IMPLEMENTATION_PLAN.md`](JOURNAL_AI_IMPLEMENTATION_PLAN.md) §5, starting with J0 (db/parser/analytics/CLI + tests) then J1 (MCP server + `CLAUDE.md`). Answer the plan's §10 open questions first.
+0. **Journal + AI coach — J1 next.** J0 is done (2026-09-20). Follow [`JOURNAL_AI_IMPLEMENTATION_PLAN.md`](JOURNAL_AI_IMPLEMENTATION_PLAN.md) §5 J1: `journal/tools.py` (shared JSON-safe functions), `similar.py`, `mcp_server.py` (FastMCP stdio, needs `pip install mcp`), `.mcp.json`, `CLAUDE.md` coach rules, `tests/test_tools.py` + `test_similar.py`. `market_snapshot` needs the `data/` layer (aiohttp) — verified live on 2026-09-07.
 1. **Create `config.yaml`** with real Telegram token + chat_id + Discord webhook; run `python -m break_signal -c config.yaml` and confirm a real break fires to both channels (validates the notify + render layer — the only M5 piece not yet exercised live). Completes M5. *(REST + WS data paths already verified live 2026-09-07.)*
 2. **User action: load Pine indicator on TradingView** — verify auto lines match the reference screenshot; tune `pivotLen`/`atrBreak` (M2/M3). Copy winning tuning into `config.example.yaml` `params:` for parity.
 3. **Deploy to Pi 5** — `docker compose up -d --build`; point `./data` (state dir) at an SSD/USB.
@@ -127,7 +134,7 @@ docker compose up -d --build
 - Wrote `JOURNAL_AI_IMPLEMENTATION_PLAN.md`. Key decisions: keep Python/SQLite/Pi stack (drop Next.js, Supabase, LangGraph, pgvector); separate `data/journal.db`; one shared `journal/tools.py` exposed three ways — MCP server for Claude Code (the "talk in this chat" path, phase J1), Telegram `/ask` via Anthropic SDK tool runner (`claude-opus-5`, read-only tools), and CLI. Deterministic `analytics.py` is the only source of numbers; LLM interprets only. Every watcher alert becomes a `signals` row that trades can link to.
 - **Repo relocated** to `G:\7Days\Trading_Journal`. The working copy there had been a partial copy at `a7ac237` (4 commits behind origin); copied `.git` + missing files over, fast-forwarded to `d926166` (multi-scale pivots, data layer, Pine fix). 22 tests pass. The old `G:\7Days\Break_Signal` folder is now a stale duplicate — delete it.
 - `signals_sol_1d_binance.csv` (10 rows, replay output) committed as the first backtest batch for journal phase J2.
-- Nothing from the journal plan implemented yet; start at J0.
+- **Built phase J0** with defaults for the plan's §10 questions (R-multiples primary; bilingual seed tags from the source doc): `journal/{models,db,analytics,parser,cli}.py` + `__main__.py`, `journal:` config block, 59 new tests (81 total, all pass), README section. CLI smoke-tested end to end (add → close → event → list/show/stats/export). Gotcha: in PowerShell pass the trade line as ONE quoted string — bare `--` is stripped and `104,200` is split on the comma before Python sees it.
 
 ### Session 4 — 2026-09-07
 - **Added multi-scale pivot detection** (IMPLEMENTATION_PLAN.md §11). A user example (Gold 4h) showed a valid consolidation trendline the single-scale detector missed. Added a finer pivot pass (`use_fine_pivots`, `pivot_len_fine=3`) merged with the coarse scale; the touch-cluster gap shrinks to match. New inputs default ON. Mirrored in Pine (`useFine`/`pivotFine` + `mergeP` + swap-ordered pairing + a `debugCand` toggle that draws all candidates) and Python core (`params.py`, `pivots.merge_pivots`, `engine._pivot_bars`, `trendline` touch_gap).
