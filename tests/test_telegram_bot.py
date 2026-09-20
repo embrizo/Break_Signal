@@ -83,6 +83,22 @@ def test_photo_screenshot(bot, tmp_path):
     assert cmd(bot, "nonsense caption", photo=b"x").startswith("caption must be")
 
 
+def test_report_and_memories(bot):
+    for i in range(5):
+        cmd(bot, "/trade SOL 4H long 100 sl 90 tp 120 #fomo")
+        cmd(bot, f"/close {i + 1} 90")
+    r = cmd(bot, "/report")
+    assert r.startswith("# Weekly review") and "n=5" in r
+    assert cmd(bot, "/report yearly").startswith("usage:")
+    m = cmd(bot, "/memories")
+    assert "#1 [pattern] Entry tag 'FOMO': 5 trades" in m and "has not worked" in m
+    assert cmd(bot, "/confirm 1").startswith("confirmed #1")
+    assert "✓ #1" in cmd(bot, "/memories")
+    assert cmd(bot, "/forget 1") == "forgot #1"
+    assert cmd(bot, "/forget 1") == "error: no memory #1"
+    assert cmd(bot, "/confirm x").startswith("usage:")
+
+
 def test_ask_review_without_coach(bot):
     assert cmd(bot, "/ask should I take it?").startswith("AI coach is off")
     assert cmd(bot, "/review 1").startswith("AI coach is off")

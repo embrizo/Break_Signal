@@ -19,7 +19,7 @@ from ..core import indicators
 from ..core.engine import Engine
 from ..core.params import Params
 from ..core.types import Candles, ms_to_iso
-from . import analytics, rules, similar
+from . import analytics, memory, rules, similar
 from .db import JournalDB, now_ms
 from .models import Trade
 from .parser import parse_close, parse_trade, resolve_symbol
@@ -248,6 +248,37 @@ class Tools:
             "tag_stats_entry": {k: v for k, v in analytics.tag_stats(self.db.list_trades(), "ENTRY").items()
                                 if k in t.entry_tags},
         })
+
+    # ── memory & reports ────────────────────────────────────────────────
+    def memories(self, refresh: bool = False) -> list[dict]:
+        """FACT: evidence-backed coach memories (patterns with n ≥ 5, rules broken ≥ 3×).
+        ``refresh`` re-derives them from the journal first."""
+        if refresh:
+            memory.refresh(self.db)
+        return _json(memory.list_memories(self.db))
+
+    def refresh_memories(self) -> dict:
+        """CALC+WRITE: re-derive memories from the journal (upsert; unconfirmed stale ones removed)."""
+        return memory.refresh(self.db)
+
+    def confirm_memory(self, memory_id: int, confirmed: bool = True) -> dict:
+        """WRITE: the trader confirms (or un-confirms) an observation."""
+        return _json(memory.confirm(self.db, memory_id, confirmed))
+
+    def forget_memory(self, memory_id: int) -> dict:
+        """WRITE: delete a memory."""
+        memory.forget(self.db, memory_id)
+        return {"deleted": memory_id}
+
+    def add_memory_note(self, content: str, type: str = "preference") -> dict:
+        """WRITE: a memory the trader states themselves (preference | terminology)."""
+        return _json(memory.add_note(self.db, content, type))
+
+    def report(self, kind: str = "weekly") -> dict:
+        """CALC: the weekly|monthly metrics block and its markdown (no LLM narrative)."""
+        from . import report as R
+        m = R.build_metrics(self.db, kind)
+        return _json({"kind": kind, "metrics": m, "markdown": R.render(m)})
 
     # ── market ──────────────────────────────────────────────────────────
     async def market_snapshot(self, symbol: str, tf: str, bars: int = 300) -> dict:

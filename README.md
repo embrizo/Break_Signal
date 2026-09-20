@@ -129,6 +129,14 @@ service as usual — the bot polls alongside the watchers.
 /review 12
 ```
 
+`/report [weekly|monthly]` gives the review (metrics this period vs all time,
+best/worst trade, tags, rule violations); with the coach on, a short narrative is
+appended. The same report is pushed automatically at `ai.weekly_report_cron`
+(default `MON 00:15` UTC) and on the 1st of each month. `/memories` lists what the
+journal has learned — evidence-backed only: a tag or setup with 5+ trades and a
+lopsided result, or a rule broken 3+ times — each with the trade ids behind it.
+`/confirm <id>` keeps one for good; `/forget <id>` drops it.
+
 `/ask` and `/review` need `ai.enabled: true` and `ANTHROPIC_API_KEY` (or
 `ai.api_key`) plus `pip install -e .[ai]`. The coach only has **read-only** tools —
 it can never log or edit a trade — and every answer is stored in `ai_analysis`
@@ -167,8 +175,8 @@ src/break_signal/
   notify/      telegram, discord (alerts); telegram_bot (commands + /ask)
   render/      mplfinance chart snapshot
   backtest/    offline replay -> CSV
-  journal/     trade journal: db, parser, analytics, rules, similar, footer, tools,
-               mcp_server (Claude Code), coach + prompts (Anthropic API), cli
+  journal/     trade journal: db, parser, analytics, rules, similar, footer, memory,
+               report, tools, mcp_server (Claude Code), coach + prompts (Anthropic API), cli
   watcher.py   one (symbol, timeframe) worker
   __main__.py  entrypoint
 tests/         algorithm tests on synthetic data

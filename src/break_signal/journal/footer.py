@@ -49,6 +49,13 @@ def alert_footer(db: JournalDB, sig: Any, signal_id: int | None = None,
     else:
         lines.append(f"📒 Journal: {hist['n']} closed trade(s) on {hist['label']} — "
                      f"stats shown from {min_n}")
+    # Which rules a trade taken on this alert would already break (only the
+    # context-based ones can be judged here — no entry/stop yet).
+    from . import rules
+    proposed = {"symbol": d["symbol"], "direction": hist["direction"], "tf": d["tf"], "ctx_rsi": d.get("rsi")}
+    broken = [v["name"] for v in rules.check(db, proposed)["violations"]]
+    if broken:
+        lines.append("   ⚠ Rules: " + "; ".join(broken))
     ref = f" --signal {signal_id}" if signal_id is not None else ""
     skip = f", or skip {signal_id} <reason> to record a pass" if signal_id is not None else ""
     lines.append(f"   Log: journal add \"{d['symbol']} {d['tf']} {direction} <entry> sl <sl> tp <tp>\"{ref}{skip}")

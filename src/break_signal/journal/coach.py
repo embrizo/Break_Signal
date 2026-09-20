@@ -288,9 +288,16 @@ class Coach:
             """FACT: the trader's structured rules."""
             return rec("journal_list_rules", {}, T.list_rules())
 
+        @beta_async_tool
+        async def journal_memories() -> str:
+            """FACT: evidence-backed coach memories — patterns with n ≥ 5, rules broken 3+ times,
+            and notes the trader confirmed — each with trade ids and period."""
+            return rec("journal_memories", {}, T.memories())
+
         return [market_snapshot, journal_stats, journal_tag_stats, journal_feature_stats,
                 journal_signal_history, journal_similar_trades, journal_search_trades,
-                journal_get_trade, journal_recent_signals, journal_rule_check, journal_list_rules]
+                journal_get_trade, journal_recent_signals, journal_rule_check, journal_list_rules,
+                journal_memories]
 
     # ── budget ──────────────────────────────────────────────────────────
     def asks_today(self) -> int:
@@ -386,6 +393,24 @@ class Coach:
             out["analysis_id"] = self._store("review", trade_id, self.cfg.model, prompts.REVIEW_VERSION,
                                              ctx, json.dumps(out, ensure_ascii=False))
         return out
+
+
+    # ── narrative (weekly / monthly report) ─────────────────────────────
+    async def narrative(self, system: str, payload: dict, max_tokens: int = 4000) -> tuple[str, list[str]]:
+        """One tool-less call: turn a deterministic metrics block into prose.
+        Returns (text, unverified_numbers)."""
+        try:
+            resp = await self.client.messages.create(
+                model=self.cfg.model,
+                max_tokens=max_tokens,
+                thinking={"type": "adaptive"},
+                system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": "METRICS (JSON):\n" + json.dumps(payload, ensure_ascii=False)}],
+            )
+        except Exception as e:  # noqa: BLE001
+            raise _friendly(e) from e
+        text = "".join(b.text for b in resp.content if b.type == "text").strip()
+        return text, parity_check(text, [ToolCall("metrics", {}, payload)])
 
 
 def _usage(msg: Any) -> dict:

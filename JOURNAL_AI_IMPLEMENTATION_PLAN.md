@@ -6,7 +6,7 @@ the system fires a breakout → you take (or skip) the trade → you log the res
 "should I take this?", answers with price-action suggestions grounded in **your own
 trades**, not generic advice.
 
-**Status:** J0–J3 code done (2026-09-20) → live checks (API key, Telegram), then J4
+**Status:** J0–J4 code done (2026-09-20) → live checks (API key, Telegram, OKX), then J5 (Pi deploy)
 **Date:** 2026-09-20
 **Source docs:** `IMPLEMENTATION_PLAN.md` (Break Signal, Phases 1–2 built),
 `trading_journal_implementation_plan_AI_extended.md` (journal + AI concept, analysed in §1)
@@ -512,15 +512,32 @@ with real numbers from your journal and a live OKX snapshot. (Journal half ✔; 
 [ ] Live: config.yaml with telegram_bot.enabled + allowed_chat_ids → `python -m break_signal -c config.yaml`, send /help
 ```
 
-### Phase J4 — Rules, weekly review, coach memory (2 days)
+### Phase J4 — Rules, weekly review, coach memory (2 days) — DONE 2026-09-20
 
 ```
-[ ] journal/rules.py + seed rules; run on add/close/event; violations surfaced in /close reply and in alert footer
-[ ] journal/report.py — weekly (Mon 00:00 UTC) and monthly: metrics block (deterministic) + WEEKLY_V1 narrative;
-      pushed to Telegram, stored in ai_analysis; --dry-run prints markdown
-[ ] journal/memory.py — after each weekly report, upsert evidence-backed memories; /memories, /confirm <id>, /forget <id>
-[ ] Equity curve + tag bar chart PNG attached to the weekly report (matplotlib, already a dep)
-[ ] tests: rules (violation true/false), report assembly on fixture journal
+[x] journal/rules.py + seed rules (J1); run on add/close/event (J1); violations in /close reply (J1) and in the
+      alert footer: "⚠ Rules: No 1D entry when RSI > 75" from a rule_check of {direction, tf, ctx_rsi} — only
+      context rules can be judged before there is an entry/stop. Seed rules now land ONCE on DB creation
+      (db._init_schema, fresh only) so deleting one sticks.
+[x] journal/report.py — build_metrics() (pure): period vs all-time summary, closed trades, best/worst, open,
+      alerts/skips, tag + tf/direction tables, rule violations, last-30 equity curve, memories. render() → markdown.
+      generate() refreshes memories, adds a WEEKLY_V1 narrative via Coach.narrative() when a coach is given
+      (parity-checked), stores in ai_analysis(kind=weekly|monthly, model, prompt_version|metrics_only).
+      run_scheduler(): weekly at ai.weekly_report_cron ("MON 00:15"), monthly on the 1st 00:30 UTC; pushes
+      markdown (+PNG) through the alert notifiers; a failed report never kills the loop. Wired in __main__
+      when ai.weekly_report and at least one notifier. CLI: journal report [--kind] [--narrative] [--dry-run]
+      [--png path] [--json]. Telegram /report [weekly|monthly] (falls back to metrics-only on CoachError).
+[x] journal/memory.py — derive(): deterministic, evidence-backed observations — entry tag / tf / direction /
+      RSI band with n ≥ 5 and win ≥ 70 % or ≤ 35 % over 90 d; rules broken ≥ 3×. refresh() upserts by key,
+      prunes unconfirmed observations the journal no longer supports, keeps confirmed ones and trader notes.
+      /memories /confirm <id> /forget <id> on Telegram; `journal memories list|confirm|forget|note` on CLI;
+      MCP journal_memories / journal_confirm_memory / journal_forget_memory / journal_add_memory_note (+
+      journal_report); coach read tool journal_memories. Schema v2 migration adds memories.key (first use of
+      the migrations table; verified on the real data/journal.db).
+[x] chart_png(): equity curve + avg-R-by-tag bars; lazy matplotlib import, None when missing (not installed
+      on the dev box — untested visually; unit test accepts either).
+[x] tests/test_memory_report.py (13) + bot/CLI cases; 172 pass. Found & fixed while driving: PF went "inf"
+      when a LOSS was declared on a +R exit (gross loss turned negative) → PF now sums only sign-matching R.
 ```
 
 ### Phase J5 — Pi deployment + hardening (1 day)
@@ -704,8 +721,8 @@ never imports `journal`.
 
 ## 11. Next action
 
-J0–J3 code is done. Next: (1) live checks — `ANTHROPIC_API_KEY` + `python -m pytest tests/evals -q`,
-then `journal ask …`; Telegram bot with a real token + your chat id; (2) **J4** — `rules.py` is
-already in; remaining: `report.py` weekly/monthly (metrics + WEEKLY_V1 narrative, Telegram push,
-`--dry-run`), `memory.py` evidence-backed observations + `/memories /confirm /forget`, equity-curve
-PNG on the weekly report, surfacing violations in the alert footer.
+J0–J4 code is done. Next: (1) live checks — `ANTHROPIC_API_KEY` + `python -m pytest tests/evals -q`,
+`journal ask …`, `journal report --narrative`; Telegram bot with a real token + your chat id; OKX from a
+machine/VPN where it resolves (`market_snapshot`, watcher); (2) **J5** — docker-compose mounts for
+`journal.db` + screenshots, nightly `.backup`, `[ai]` extra in the Dockerfile behind `AI_ENABLED`,
+README/handoff refresh.

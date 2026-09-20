@@ -15,8 +15,9 @@ Conventions
   closed trade that has an outcome (BE included); ``win_rate = wins / n``.
 - R-based figures (avg R, PF, drawdown, curve) use the subset that has an R
   value (``r_n``): a trade closed without a stop has an outcome but no R.
-- Profit factor is in R, by outcome: ``sum(R of WIN) / |sum(R of LOSS)|``; BE
-  trades contribute to ``total_r`` but not to PF.
+- Profit factor is in R, by outcome: ``sum(R>0 of WIN) / |sum(R<0 of LOSS)|``;
+  BE trades and sign-contradicting overrides contribute to ``total_r`` but not
+  to PF.
 - Drawdown is measured on the cumulative-R equity curve, trades ordered by
   ``closed_ts``.
 """
@@ -162,8 +163,11 @@ def summarize(trades: list[Trade]) -> dict:
     rs = [t.r_multiple for t in ts if t.r_multiple is not None]
     win_rs = [t.r_multiple for t in wins if t.r_multiple is not None]
     loss_rs = [t.r_multiple for t in losses if t.r_multiple is not None]
-    gross_win = sum(win_rs)          # BE trades are neutral: in total_r, not in PF
-    gross_loss = -sum(loss_rs)
+    # BE trades are neutral (in total_r, not PF). A WIN with R ≤ 0 or a LOSS with
+    # R ≥ 0 (user-overridden outcome) contributes nothing, so a contradiction can
+    # never flip the sign of a gross figure and fake an infinite PF.
+    gross_win = sum(r for r in win_rs if r > 0)
+    gross_loss = -sum(r for r in loss_rs if r < 0)
     pf: float | None
     if gross_loss > 0:
         pf = gross_win / gross_loss

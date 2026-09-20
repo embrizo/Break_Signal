@@ -35,6 +35,7 @@ HELP = """Journal commands
 /tag <id> entry|exit #tag ...
 /shot <id> pre|post   (as the caption of a photo)
 /list [30d|6m|all]   /show <id>   /stats [period]   /signals   /tags   /rules
+/report [weekly|monthly]   /memories   /confirm <id>   /forget <id>
 /ask <question>      /review <id>     (AI coach, read-only)
 Example: /trade SOL 4H long 231.5 sl 225 tp 245 #breakout #retest -- clean retest"""
 
@@ -276,6 +277,35 @@ class TelegramBot:
         path.write_bytes(photo)
         self.tools.add_screenshot(trade_id, phase, str(path))
         return f"saved {phase} screenshot for #{trade_id}: {path.name}"
+
+    def _cmd_memories(self, rest: str) -> str:
+        from ..journal.memory import format_memories
+        return format_memories(self.tools.memories(refresh=True))
+
+    def _cmd_confirm(self, rest: str) -> str:
+        if not rest.isdigit():
+            return "usage: /confirm <memory_id>"
+        m = self.tools.confirm_memory(int(rest))
+        return f"confirmed #{m['id']}: {m['content']}"
+
+    def _cmd_forget(self, rest: str) -> str:
+        if not rest.isdigit():
+            return "usage: /forget <memory_id>"
+        self.tools.forget_memory(int(rest))
+        return f"forgot #{rest}"
+
+    async def _cmd_report(self, rest: str) -> str:
+        from ..journal import report as R
+        kind = rest.strip().lower() or "weekly"
+        if kind not in R.PERIOD_DAYS:
+            return "usage: /report [weekly|monthly]"
+        from ..journal.coach import CoachError
+        try:
+            out = await R.generate(self.tools.db, kind, self.coach, store=True)
+        except CoachError as e:
+            out = await R.generate(self.tools.db, kind, None, store=True)
+            out["markdown"] += f"\n\n(coach notes unavailable: {e})"
+        return out["markdown"]
 
     async def _cmd_ask(self, rest: str) -> str:
         if self.coach is None:

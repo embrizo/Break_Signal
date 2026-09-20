@@ -304,6 +304,48 @@ def cmd_review(db: JournalDB, args, tools: Tools) -> int:
     return 0 if "error" not in r else 1
 
 
+def cmd_report(db: JournalDB, args, tools: Tools) -> int:
+    import asyncio
+    from . import report as R
+    from .coach import CoachError
+    coach = _coach(tools) if args.narrative else None
+    try:
+        out = asyncio.run(R.generate(db, args.kind, coach, store=not args.dry_run))
+    except CoachError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(out["metrics"], ensure_ascii=False, indent=2))
+    else:
+        print(out["markdown"])
+    if args.png:
+        png = R.chart_png(out["metrics"])
+        if png is None:
+            print("(no chart: matplotlib missing or nothing to draw)", file=sys.stderr)
+        else:
+            Path(args.png).write_bytes(png)
+            print(f"wrote {args.png}", file=sys.stderr)
+    if not args.dry_run:
+        print(f"(stored as ai_analysis #{out['analysis_id']})", file=sys.stderr)
+    return 0
+
+
+def cmd_memories(db: JournalDB, args, tools: Tools) -> int:
+    from .memory import format_memories
+    if args.mem_cmd == "list":
+        print(format_memories(tools.memories(refresh=not args.no_refresh)))
+    elif args.mem_cmd == "confirm":
+        m = tools.confirm_memory(args.memory_id)
+        print(f"confirmed #{m['id']}: {m['content']}")
+    elif args.mem_cmd == "forget":
+        tools.forget_memory(args.memory_id)
+        print(f"forgot #{args.memory_id}")
+    elif args.mem_cmd == "note":
+        m = tools.add_memory_note(" ".join(args.text), args.type)
+        print(f"noted #{m['id']}: {m['content']}")
+    return 0
+
+
 def cmd_stats(db: JournalDB, args, tools: Tools) -> int:
     trades = _filtered(db, args)
     label = f"period={args.period or 'all'}" + (f" symbol={args.symbol}" if args.symbol else "") \
@@ -464,6 +506,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.add_argument("--no-store", action="store_true")
     p.set_defaults(fn=cmd_review)
+
+    p = sub.add_parser("report", help="weekly/monthly review (metrics; --narrative adds AI notes)")
+    p.add_argument("--kind", choices=["weekly", "monthly"], default="weekly")
+    p.add_argument("--narrative", action="store_true", help="add coach notes (needs ANTHROPIC_API_KEY)")
+    p.add_argument("--dry-run", action="store_true", help="print only; don't store in ai_analysis")
+    p.add_argument("--png", help="also write the equity/tag chart to this path (needs matplotlib)")
+    p.add_argument("--json", action="store_true", help="print the metrics block instead of markdown")
+    p.set_defaults(fn=cmd_report)
+
+    p = sub.add_parser("memories", help="coach memory: evidence-backed observations")
+    ms = p.add_subparsers(dest="mem_cmd", required=True)
+    q = ms.add_parser("list"); q.add_argument("--no-refresh", action="store_true")
+    q = ms.add_parser("confirm"); q.add_argument("memory_id", type=int)
+    q = ms.add_parser("forget"); q.add_argument("memory_id", type=int)
+    q = ms.add_parser("note"); q.add_argument("text", nargs="+"); q.add_argument("--type", default="preference", choices=["preference", "terminology"])
+    p.set_defaults(fn=cmd_memories)
 
     p = sub.add_parser("stats", help="deterministic performance numbers")
     _add_filters(p, with_limit=False)

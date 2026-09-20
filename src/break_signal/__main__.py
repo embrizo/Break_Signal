@@ -46,10 +46,17 @@ async def run(config_path: str) -> None:
     log.info("Journal: %s", cfg.journal.db)
     watchers = [Watcher(cfg, w, state, notifiers, journal) for w in cfg.watches]
     tasks = [w.run() for w in watchers]
-    bot = build_telegram_bot(cfg, journal, log)
+    from .journal.tools import Tools
+    tools = Tools(journal, cfg)
+    coach = build_coach(cfg, tools, log)
+    bot = build_telegram_bot(cfg, tools, coach, log)
     if bot is not None:
         tasks.append(bot.run())
-    log.info("Starting %d watcher(s)%s", len(watchers), " + telegram bot" if bot else "")
+    if cfg.ai.weekly_report and notifiers:
+        from .journal.report import run_scheduler
+        tasks.append(run_scheduler(cfg, journal, notifiers, coach))
+    log.info("Starting %d watcher(s)%s%s", len(watchers), " + telegram bot" if bot else "",
+             " + report scheduler" if cfg.ai.weekly_report and notifiers else "")
     try:
         await asyncio.gather(*tasks)
     finally:
@@ -57,8 +64,25 @@ async def run(config_path: str) -> None:
         journal.close()
 
 
-def build_telegram_bot(cfg, journal: JournalDB, log):
-    """Command bot (+ AI coach when enabled and a key is available), or None."""
+def build_coach(cfg, tools, log):
+    """The AI coach when ai.enabled, a key is available and the SDK is installed; else None."""
+    if not cfg.ai.enabled:
+        return None
+    if not (cfg.ai.api_key or os.environ.get("ANTHROPIC_API_KEY")):
+        log.warning("ai.enabled but no API key (ai.api_key or ANTHROPIC_API_KEY) — /ask and report notes disabled")
+        return None
+    try:
+        from .journal.coach import Coach
+        coach = Coach(tools, cfg.ai)
+    except ImportError:
+        log.warning("ai.enabled but the anthropic package is missing (pip install -e .[ai])")
+        return None
+    log.info("AI coach: %s", cfg.ai.model)
+    return coach
+
+
+def build_telegram_bot(cfg, tools, coach, log):
+    """Command bot, or None when disabled / no token."""
     tb = cfg.telegram_bot
     if not tb.enabled:
         return None
@@ -68,21 +92,7 @@ def build_telegram_bot(cfg, journal: JournalDB, log):
         return None
     if not tb.allowed_chat_ids:
         log.warning("telegram_bot.allowed_chat_ids is empty — nobody can use the bot")
-    from .journal.tools import Tools
     from .notify.telegram_bot import TelegramBot
-
-    tools = Tools(journal, cfg)
-    coach = None
-    if cfg.ai.enabled:
-        if cfg.ai.api_key or os.environ.get("ANTHROPIC_API_KEY"):
-            try:
-                from .journal.coach import Coach
-                coach = Coach(tools, cfg.ai)
-                log.info("AI coach: %s", cfg.ai.model)
-            except ImportError:
-                log.warning("ai.enabled but the anthropic package is missing (pip install -e .[ai])")
-        else:
-            log.warning("ai.enabled but no API key (ai.api_key or ANTHROPIC_API_KEY) — /ask disabled")
     return TelegramBot(token, cfg, tools, coach)
 
 

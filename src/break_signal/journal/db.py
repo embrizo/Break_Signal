@@ -28,7 +28,7 @@ from .models import (
     TradeEvent,
 )
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -138,12 +138,32 @@ CREATE TABLE IF NOT EXISTS ai_analysis (
 CREATE TABLE IF NOT EXISTS memories (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     type           TEXT NOT NULL,
+    key            TEXT,                        -- stable id of the observation (upsert target), v2
     content        TEXT NOT NULL,
     evidence       TEXT NOT NULL,
     confirmed      INTEGER NOT NULL DEFAULT 0,
     first_seen_ts  INTEGER NOT NULL, last_seen_ts INTEGER NOT NULL
 );
 """
+# NB: idx_memories_key is created by _migrate_v2 (fresh DBs run it too), not here —
+# on a v1 file the column does not exist yet when this script runs.
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    return any(r["name"] == column for r in conn.execute(f"PRAGMA table_info({table})"))
+
+
+def _migrate_v2(conn: sqlite3.Connection) -> None:
+    """v1 → v2: memories.key for evidence-backed upserts (journal/memory.py)."""
+    if not _has_column(conn, "memories", "key"):
+        conn.execute("ALTER TABLE memories ADD COLUMN key TEXT")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_key ON memories(key)")
+
+
+# (target version, upgrade function) in order. Append; never edit a shipped step.
+_MIGRATIONS: list[tuple[int, Any]] = [
+    (2, _migrate_v2),
+]
 
 # Bilingual word bank. Users extend freely; names are unique case-insensitively.
 SEED_TAGS: list[tuple[str, str]] = [
@@ -201,14 +221,32 @@ class JournalDB:
     def _init_schema(self) -> None:
         self.conn.executescript(_SCHEMA)
         cur = self.conn.execute("SELECT MAX(version) FROM schema_version")
-        current = cur.fetchone()[0]
-        if current is None or current < SCHEMA_VERSION:
-            self.conn.execute(
-                "INSERT INTO schema_version(version, applied_ts) VALUES (?,?)",
-                (SCHEMA_VERSION, now_ms()),
-            )
+        current = cur.fetchone()[0] or 0
+        fresh = current == 0
+        # Incremental migrations: each step upgrades from version n to n+1 and is
+        # recorded so it never runs twice. Fresh databases start at the current
+        # schema (the CREATE statements above) and just record the version.
+        for version, step in _MIGRATIONS:
+            if current < version:
+                step(self.conn)
+                self.conn.execute("INSERT INTO schema_version(version, applied_ts) VALUES (?,?)",
+                                  (version, now_ms()))
+                current = version
+        if current < SCHEMA_VERSION:
+            self.conn.execute("INSERT INTO schema_version(version, applied_ts) VALUES (?,?)",
+                              (SCHEMA_VERSION, now_ms()))
         self.seed_tags()
+        if fresh:
+            # Seed rules once, on creation only, so a trader who deletes one is
+            # not nagged with it again on the next start. (Tags re-seed: they
+            # are harmless vocabulary; rules are opinions.)
+            from . import rules
+            rules.ensure_seed(self)
         self.conn.commit()
+
+    @property
+    def schema_version(self) -> int:
+        return int(self.conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0)
 
     def close(self) -> None:
         self.conn.close()

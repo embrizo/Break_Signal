@@ -43,7 +43,13 @@ YOUR DECISION.      ← end here; offer to log it (with the signal id) if they t
 
 Typical tool sequence: `market_snapshot(symbol, tf)` → `journal_similar_trades(...)`
 with the snapshot's RSI / ATR distance / side → `journal_tag_stats` or
-`journal_feature_stats` → `journal_rule_check(proposed)`.
+`journal_feature_stats` → `journal_rule_check(proposed)`. `journal_memories` holds
+evidence-backed observations already derived from the journal (n ≥ 5 patterns,
+repeated rule breaks) — quote them with their n, and if the user agrees or
+disagrees with one, offer `journal_confirm_memory` / `journal_forget_memory`.
+`journal_report(kind)` gives the weekly/monthly metrics block when they ask for a review.
+Only store a note (`journal_add_memory_note`) for something the user explicitly
+said about themselves, never for your own inferences.
 
 ### Logging from natural language
 

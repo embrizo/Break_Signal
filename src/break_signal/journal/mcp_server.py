@@ -152,6 +152,22 @@ def journal_review_context(trade_id: int) -> dict:
 
 
 @mcp.tool()
+def journal_memories(refresh: bool = False) -> list[dict]:
+    """FACT: the coach's evidence-backed memories — patterns with n ≥ 5 that clearly worked or
+    didn't, rules broken 3+ times, and notes the trader added. Each carries trade ids and the
+    period. refresh=true re-derives them from the journal first."""
+    return T.memories(refresh)
+
+
+@mcp.tool()
+def journal_report(kind: str = "weekly") -> dict:
+    """CALC: the weekly|monthly review — metrics block (this period vs all time, best/worst
+    trade, tag and timeframe tables, rule violations, memories) plus rendered markdown.
+    No narrative; interpret it yourself under the coach rules."""
+    return T.report(kind)
+
+
+@mcp.tool()
 async def market_snapshot(symbol: str, tf: str, bars: int = 300) -> dict:
     """FACT (live OKX candles) + CALC (Break Signal engine): price, ATR, RSI, volume ratio,
     active support/resistance lines with distance in ATR and %, nearest levels, and whether
@@ -241,6 +257,26 @@ def journal_add_rule(name: str, condition: dict, severity: str = "high") -> dict
 def journal_set_rule_enabled(rule_id: int, enabled: bool) -> dict:
     """WRITE: enable or disable a rule."""
     return T.set_rule_enabled(rule_id, enabled)
+
+
+@mcp.tool()
+def journal_confirm_memory(memory_id: int, confirmed: bool = True) -> dict:
+    """WRITE: the trader confirms an observation is right about them (or un-confirms it).
+    Confirmed memories survive re-derivation."""
+    return T.confirm_memory(memory_id, confirmed)
+
+
+@mcp.tool()
+def journal_forget_memory(memory_id: int) -> dict:
+    """WRITE: delete a memory the trader rejects."""
+    return T.forget_memory(memory_id)
+
+
+@mcp.tool()
+def journal_add_memory_note(content: str, type: str = "preference") -> dict:
+    """WRITE: store something the trader told you about themselves — a preference or their
+    own terminology (type preference | terminology). Only what they actually said."""
+    return T.add_memory_note(content, type)
 
 
 def main() -> None:

@@ -56,6 +56,26 @@ def test_event_reports_violation_and_errors_are_clean(dbp, capsys):
     assert rc == 2 and "direction" in err
 
 
+def test_report_and_memories_cli(dbp, capsys, tmp_path):
+    for i in range(5):
+        run(dbp, "add", "SOL 4H long 100 sl 90 tp 120 #fomo", capsys=capsys)
+        run(dbp, "close", f"{i + 1} 90", capsys=capsys)
+    rc, out, err = run(dbp, "report", "--dry-run", capsys=capsys)
+    assert rc == 0 and out.startswith("# Weekly review") and "stored" not in err
+    rc, out, err = run(dbp, "report", "--kind", "monthly", "--png", str(tmp_path / "c.png"), capsys=capsys)
+    assert rc == 0 and "# Monthly review" in out and "stored as ai_analysis #1" in err
+    rc, out, _ = run(dbp, "report", "--json", "--dry-run", capsys=capsys)
+    assert json.loads(out)["period"]["n"] == 5
+    rc, out, _ = run(dbp, "memories", "list", capsys=capsys)
+    assert rc == 0 and "Entry tag 'FOMO': 5 trades" in out
+    rc, out, _ = run(dbp, "memories", "note", "I", "trade", "only", "4H", capsys=capsys)
+    assert out.startswith("noted #")
+    rc, out, _ = run(dbp, "memories", "confirm", "1", capsys=capsys)
+    assert out.startswith("confirmed #1")
+    rc, out, _ = run(dbp, "memories", "forget", "1", capsys=capsys)
+    assert out == "forgot #1\n"
+
+
 def test_stats_and_list_run(dbp, capsys):
     run(dbp, "add", "SOL 4H long 100 sl 90", capsys=capsys)
     run(dbp, "close", "1 120", capsys=capsys)

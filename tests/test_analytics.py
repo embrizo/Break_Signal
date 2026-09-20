@@ -133,6 +133,22 @@ def test_counts_follow_stored_outcome_not_r():
     db.close()
 
 
+def test_pf_ignores_sign_contradicting_overrides():
+    """A LOSS declared on a +R exit must not shrink gross loss (which made PF 'inf')."""
+    db = JournalDB(":memory:")
+    a = db.add_trade("SOL-USDT-SWAP", "LONG", entry_price=100, sl_price=90, opened_ts=1)
+    db.close_trade(a.id, 120, closed_ts=2)                       # WIN +2
+    b = db.add_trade("SOL-USDT-SWAP", "LONG", entry_price=100, sl_price=90, opened_ts=3)
+    db.close_trade(b.id, 90, closed_ts=4)                        # LOSS -1
+    c = db.add_trade("SOL-USDT-SWAP", "LONG", entry_price=100, sl_price=90, opened_ts=5)
+    db.close_trade(c.id, 115, outcome="LOSS", closed_ts=6)       # declared LOSS at +1.5
+    s = A.summarize(db.list_trades())
+    assert (s["wins"], s["losses"]) == (1, 2)
+    assert s["profit_factor"] == pytest.approx(2.0)              # 2 / |-1|; the +1.5 "loss" is ignored
+    assert s["total_r"] == pytest.approx(2.5)                    # but it still counts in total R
+    db.close()
+
+
 def test_tag_in_both_phases_counted_once():
     db = JournalDB(":memory:")
     t = db.add_trade("SOL-USDT-SWAP", "LONG", entry_price=100, sl_price=90, entry_tags=["Breakout"])
