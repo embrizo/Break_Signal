@@ -108,10 +108,15 @@ def test_http_endpoint_secret_and_notify():
             r = await c.post("/pine/s3cret", data=PINE)                  # duplicate: stored, not pushed again
             body = await r.json()
             assert body["duplicates"] == 1 and body["pushed"] == 0 and len(cap.sent) == 2
+            # a body that isn't the alert JSON at all (default TradingView message,
+            # plain text): nothing is stored, so it must NOT look like success
             r = await c.post("/pine/s3cret", data="not json at all")
-            assert r.status == 200 and (await r.json())["stored"] == []
-            r = await c.post("/pine/s3cret", data='{"symbol":"X"}')
-            assert r.status == 400
+            body = await r.json()
+            assert r.status == 400 and body["stored"] == [] and "alert() JSON" in body["error"]
+            assert (await c.post("/pine/s3cret", data="")).status == 400       # empty message
+            r = await c.post("/pine/s3cret", data='{"symbol":"X"}')            # JSON, missing fields
+            body = await r.json()
+            assert r.status == 400 and "KeyError" in body["rejected"][0]
             r = await c.post("/pine/s3cret", data="x" * 70_000)
             assert r.status == 413
     _run(go())

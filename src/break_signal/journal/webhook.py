@@ -167,9 +167,16 @@ def make_pine_handler(cfg: "Config", db: JournalDB, notifiers: list[Any]):
                         log.exception("webhook: notifier %s failed", getattr(n, "name", n))
         out = {"stored": [{k: v for k, v in s.items() if k != "signal"} for s in res["stored"]],
                "duplicates": res["duplicates"], "rejected": res["rejected"], "pushed": pushed}
-        status = 200 if res["stored"] or not res["rejected"] else 400
-        log.info("webhook: %d stored (%d new), %d rejected", len(res["stored"]),
-                 sum(s["new"] for s in res["stored"]), len(res["rejected"]))
-        return web.json_response(out, status=status)
+        if res["stored"]:
+            log.info("webhook: %d stored (%d new), %d rejected", len(res["stored"]),
+                     sum(s["new"] for s in res["stored"]), len(res["rejected"]))
+            return web.json_response(out, status=200)
+        # Nothing usable in the body. A 200 here would show up as a green tick in
+        # TradingView's alert log while no signal ever reaches the journal, so say so.
+        out["error"] = ("no alert stored — the body must be the Pine indicator's alert() JSON: "
+                        "one object per line, or a JSON array. Check the alert's Message box.")
+        log.warning("webhook: nothing stored from %d bytes (%d rejected) — %.120s",
+                    len(body), len(res["rejected"]), body.replace("\n", " ") or "<empty body>")
+        return web.json_response(out, status=400)
 
     return pine

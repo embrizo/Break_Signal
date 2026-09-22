@@ -178,7 +178,10 @@ and a long `webhook.secret`, point a TradingView alert's webhook URL at
 `http://<host>:8787/pine/<secret>`, and every break the indicator fires lands in
 the journal as a `pine` signal (with `webhook.notify` it is also pushed to
 Telegram/Discord with the history footer). Only that path needs a route in from
-the internet. The coach only has **read-only** tools —
+the internet. The reply says what happened — a stored signal is `200`, a body that
+isn't the indicator's `alert()` JSON (the default TradingView message, say) is a
+`400` naming the problem, so a misconfigured alert shows up in TradingView's log
+instead of silently storing nothing. The coach only has **read-only** tools —
 it can never log or edit a trade — and every answer is stored in `ai_analysis`
 with the model, prompt version and the exact tool results it saw. Numbers in a
 reply that don't appear in any tool result are flagged with ⚠. Try it without
