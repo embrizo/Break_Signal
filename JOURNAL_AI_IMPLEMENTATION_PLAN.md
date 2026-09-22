@@ -386,14 +386,21 @@ CREATE TABLE memories (
 ### 4.3 Rule engine semantics
 
 `rules.py` evaluates `condition` against a flat dict built from the trade row plus
-derived fields (`planned_rr`, `has_event_sl_moved`, `entry_hour_utc`, `tags`):
+derived fields (`planned_rr`, `sl_widened`, `has_event_sl_moved`, `entry_hour_utc`, `tags`):
 
 | Operator | Example |
 |---|---|
 | `<=, <, >=, >, ==, !=` | `{"field":"risk_pct","op":"<=","value":1}` |
 | `in / not_in` | `{"field":"tf","op":"in","value":["4H","1D"]}` |
 | `has_tag / not_has_tag` | `{"field":"tags","op":"not_has_tag","value":"FOMO"}` |
-| `is_false` | `{"field":"has_event_sl_moved","op":"is_false"}` |
+| `is_false` | `{"field":"sl_widened","op":"is_false"}` |
+
+`sl_widened` reads the `sl_moved` events in order and compares `from`/`to` against the
+trade's direction: a stop moved *away* from entry (down on a LONG, up on a SHORT) is
+widening; trailing it toward entry is not. It is `None` — rule not applicable — when the
+direction or the numbers are missing. `has_event_sl_moved` (true for any move, whatever
+the direction) is kept for user-written rules. Schema v3 repoints the seeded rule and
+drops the violations the old direction-blind version recorded.
 
 Seed rules (editable): max risk 1 %, planned R:R ≥ 1.5, never widen SL, only tagged
 setups from an approved list, no entry when the 1D RSI > 75 / < 25.

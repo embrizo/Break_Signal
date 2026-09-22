@@ -57,6 +57,64 @@ def test_trade_facts_derived_fields(db):
     assert f["has_sl"] and f["has_tp"]
 
 
+@pytest.mark.parametrize("direction,moves,expected", [
+    # a stop moved AWAY from entry is widening: down for a LONG, up for a SHORT
+    ("LONG", [{"from": 90, "to": 85}], True),
+    ("SHORT", [{"from": 110, "to": 115}], True),
+    # …toward entry is trailing/locking in, which is the opposite — never a violation
+    ("LONG", [{"from": 90, "to": 95}], False),
+    ("LONG", [{"from": 90, "to": 100}], False),          # to break-even
+    ("SHORT", [{"from": 110, "to": 105}], False),
+    # one widening move anywhere in the sequence is enough
+    ("LONG", [{"from": 90, "to": 95}, {"from": 95, "to": 88}], True),
+    ("LONG", [{"from": 90, "to": 95}, {"from": 95, "to": 97}], False),
+    # a later move with only "to" chains off the previous move's "to"
+    ("LONG", [{"from": 90, "to": 95}, {"to": 92}], True),
+    ("LONG", [{"from": 90, "to": 95}, {"to": 96}], False),
+    # unjudgeable: no numbers at all, or a first move with no starting point
+    ("LONG", [{}], None),
+    ("LONG", [{"to": 95}], None),
+    ("LONG", [{"from": 90, "to": 85}, {}], True),        # already widened → still True
+    ("LONG", [{"from": 90, "to": 95}, {}], None),        # can't rule it out
+    ("LONG", [{"from": "90", "to": "85"}], True),        # strings (came in as k=v text)
+])
+def test_sl_widened(direction, moves, expected):
+    events = [{"type": "sl_moved", "data": m, "event_ts": i} for i, m in enumerate(moves)]
+    assert rules.sl_widened(direction, events) is expected
+
+
+def test_sl_widened_edge_cases():
+    assert rules.sl_widened("LONG", []) is False                       # never moved
+    assert rules.sl_widened("LONG", [{"type": "note", "data": {"x": 1}}]) is False
+    assert rules.sl_widened(None, [{"type": "sl_moved", "data": {"from": 90, "to": 85}}]) is None
+    assert rules.sl_widened("long", [{"type": "sl_moved", "data": {"from": 90, "to": 85}}]) is True
+
+
+def test_trailing_the_stop_is_not_a_violation(db):
+    """The bug this rule had: any sl_moved event counted as widening."""
+    t = db.add_trade("SOL-USDT-SWAP", "LONG", tf="1D", entry_price=100, sl_price=90, tp_price=125)
+    db.add_event(t.id, "sl_moved", {"from": 90, "to": 100})            # trail to break-even
+    f = rules.trade_facts(db.get_trade(t.id))
+    assert f["sl_widened"] is False and f["has_event_sl_moved"] is True
+    res = rules.check(db, db.get_trade(t.id))
+    assert "Never widen the stop" not in {v["name"] for v in res["violations"]}
+    assert "Never widen the stop" in {p["name"] for p in res["passed"]}
+
+    s = db.add_trade("SOL-USDT-SWAP", "SHORT", tf="1D", entry_price=100, sl_price=110, tp_price=80)
+    db.add_event(s.id, "sl_moved", {"from": 110, "to": 104})           # trail down on a short
+    assert "Never widen the stop" not in {v["name"] for v in rules.check(db, db.get_trade(s.id))["violations"]}
+    db.add_event(s.id, "sl_moved", {"from": 104, "to": 112})           # then widen it
+    assert "Never widen the stop" in {v["name"] for v in rules.check(db, db.get_trade(s.id))["violations"]}
+
+
+def test_unjudgeable_stop_move_is_not_applicable(db):
+    t = db.add_trade("SOL-USDT-SWAP", "LONG", tf="1D", entry_price=100, sl_price=90, tp_price=125)
+    db.add_event(t.id, "sl_moved", {"note": "tightened a bit"})        # no numbers
+    res = rules.check(db, db.get_trade(t.id))
+    assert "Never widen the stop" in {x["name"] for x in res["not_applicable"]}
+    assert "Never widen the stop" not in {v["name"] for v in res["violations"]}
+
+
 def test_check_against_seed_rules(db):
     t = db.add_trade("SOL-USDT-SWAP", "LONG", tf="1D", entry_price=100, sl_price=90, tp_price=125,
                      risk_pct=2, entry_tags=["FOMO"], ctx_rsi=80)

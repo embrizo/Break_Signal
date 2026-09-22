@@ -28,7 +28,7 @@ from .models import (
     TradeEvent,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -160,9 +160,48 @@ def _migrate_v2(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_memories_key ON memories(key)")
 
 
+def _migrate_v3(conn: sqlite3.Connection) -> None:
+    """v2 → v3: 'Never widen the stop' judges the direction of the move.
+
+    The seeded rule fired on *any* ``sl_moved`` event, so trailing a stop to
+    break-even counted as widening it. Repoint the stored rule at the new
+    ``sl_widened`` fact and drop the violations it recorded that are no longer
+    violations. A user-edited rule (different condition) is left alone.
+    """
+    from .rules import sl_widened
+
+    old = {"field": "has_event_sl_moved", "op": "is_false"}
+    new = json.dumps({"field": "sl_widened", "op": "is_false"})
+    for row in conn.execute("SELECT id, condition FROM rules").fetchall():
+        try:
+            if json.loads(row[1]) != old:
+                continue
+        except (TypeError, ValueError):
+            continue
+        rule_id = row[0]
+        for (trade_id,) in conn.execute(
+                "SELECT trade_id FROM rule_violations WHERE rule_id=?", (rule_id,)).fetchall():
+            tr = conn.execute("SELECT direction FROM trades WHERE id=?", (trade_id,)).fetchone()
+            events = [{"type": t, "data": _loads(data), "event_ts": ts} for t, data, ts in conn.execute(
+                "SELECT type, data, event_ts FROM trade_events WHERE trade_id=?", (trade_id,))]
+            if sl_widened(tr[0] if tr else None, events) is not True:
+                conn.execute("DELETE FROM rule_violations WHERE rule_id=? AND trade_id=?",
+                             (rule_id, trade_id))
+        conn.execute("UPDATE rules SET condition=? WHERE id=?", (new, rule_id))
+
+
+def _loads(raw: Any) -> dict:
+    try:
+        d = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
 # (target version, upgrade function) in order. Append; never edit a shipped step.
 _MIGRATIONS: list[tuple[int, Any]] = [
     (2, _migrate_v2),
+    (3, _migrate_v3),
 ]
 
 # Bilingual word bank. Users extend freely; names are unique case-insensitively.

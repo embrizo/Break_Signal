@@ -3,7 +3,7 @@ import sqlite3
 import pytest
 
 from break_signal.core.types import Signal
-from break_signal.journal.db import SEED_TAGS, JournalDB, iso_to_ms
+from break_signal.journal.db import SCHEMA_VERSION, SEED_TAGS, JournalDB, iso_to_ms
 
 
 @pytest.fixture
@@ -32,8 +32,74 @@ def test_schema_init_is_idempotent(tmp_path):
     assert len(b.list_trades()) == 1
     assert len(b.list_tags()) == len(SEED_TAGS)
     versions = b.conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0]
-    assert versions == 1
+    assert b.schema_version == SCHEMA_VERSION
     b.close()
+    c = JournalDB(path)                     # a third open records nothing new
+    assert c.conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == versions
+    c.close()
+
+
+def _downgrade_to_v2(path, trailing: bool) -> tuple[int, int]:
+    """Rebuild the v2 state of the 'Never widen the stop' rule on an existing file:
+    the direction-blind condition plus a violation recorded against a trade that
+    only *trailed* its stop (``trailing``) or genuinely widened it."""
+    import json
+
+    d = JournalDB(path)
+    t = d.add_trade("SOL-USDT-SWAP", "LONG", tf="1D", entry_price=100, sl_price=90, tp_price=125)
+    d.add_event(t.id, "sl_moved", {"from": 90, "to": 100 if trailing else 85})
+    rule_id = d.conn.execute("SELECT id FROM rules WHERE name='Never widen the stop'").fetchone()[0]
+    d.conn.execute("UPDATE rules SET condition=? WHERE id=?",
+                   (json.dumps({"field": "has_event_sl_moved", "op": "is_false"}), rule_id))
+    d.conn.execute("DELETE FROM rule_violations WHERE trade_id=?", (t.id,))
+    d.conn.execute("INSERT INTO rule_violations(trade_id, rule_id, detail) VALUES (?,?,?)",
+                   (t.id, rule_id, "has_event_sl_moved=True"))
+    d.conn.execute("DELETE FROM schema_version WHERE version >= 3")
+    d.conn.commit()
+    d.close()
+    return t.id, rule_id
+
+
+def test_migration_v3_repoints_the_widen_rule_and_drops_false_violations(tmp_path):
+    path = tmp_path / "v2.db"
+    trade_id, rule_id = _downgrade_to_v2(path, trailing=True)
+
+    db = JournalDB(path)                       # opening runs the migration
+    assert db.schema_version == 3
+    cond = db.conn.execute("SELECT condition FROM rules WHERE id=?", (rule_id,)).fetchone()[0]
+    assert '"sl_widened"' in cond
+    from break_signal.journal import rules
+    assert rules.stored_violations(db, trade_id) == []      # trailing was never a violation
+    db.close()
+
+
+def test_migration_v3_keeps_a_real_widening_violation(tmp_path):
+    path = tmp_path / "v2b.db"
+    trade_id, _ = _downgrade_to_v2(path, trailing=False)
+
+    db = JournalDB(path)
+    from break_signal.journal import rules
+    assert [v["name"] for v in rules.stored_violations(db, trade_id)] == ["Never widen the stop"]
+    db.close()
+
+
+def test_migration_v3_leaves_a_user_edited_rule_alone(tmp_path):
+    import json
+
+    path = tmp_path / "v2c.db"
+    _downgrade_to_v2(path, trailing=True)
+    d = JournalDB(path)                        # migrates
+    custom = json.dumps({"field": "has_event_sl_moved", "op": "is_true"})
+    d.conn.execute("INSERT INTO rules(name, condition, severity, enabled) VALUES (?,?,?,1)",
+                   ("Always move the stop", custom, "low"))
+    d.conn.execute("DELETE FROM schema_version WHERE version >= 3")
+    d.conn.commit()
+    d.close()
+
+    db = JournalDB(path)                       # migration runs again over the custom rule
+    got = db.conn.execute("SELECT condition FROM rules WHERE name='Always move the stop'").fetchone()[0]
+    assert json.loads(got) == json.loads(custom)
+    db.close()
 
 
 def test_seed_tags_present_and_bilingual(db):

@@ -104,6 +104,9 @@ python -m break_signal.journal tag list
 ```
 
 Quote the whole line (PowerShell eats bare `--` and splits on commas otherwise).
+Give `sl_moved` both `from=` and `to=`: the *"Never widen the stop"* rule compares them
+against your direction, so trailing a stop toward entry is not flagged — only moving it
+away is. Without the numbers the rule is reported as not-applicable rather than broken.
 R-multiple, PnL and every statistic are computed by `journal/analytics.py`; you
 never type them. Anything you don't say is stored as NULL, not guessed. Tags are
 free-form (Thai works) and unknown ones are created on the fly.

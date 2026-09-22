@@ -31,11 +31,73 @@ _CMP = {
 SEED_RULES: list[tuple[str, dict, str]] = [
     ("Max risk 1%", {"field": "risk_pct", "op": "<=", "value": 1.0}, "high"),
     ("Planned R:R >= 1.5", {"field": "planned_rr", "op": ">=", "value": 1.5}, "high"),
-    ("Never widen the stop", {"field": "has_event_sl_moved", "op": "is_false"}, "high"),
+    ("Never widen the stop", {"field": "sl_widened", "op": "is_false"}, "high"),
     ("No FOMO entries", {"field": "tags", "op": "not_has_tag", "value": "FOMO"}, "medium"),
     ("No 1D entry when RSI > 75", {"field": "rsi_1d_overbought", "op": "is_false"}, "medium"),
     ("No 1D entry when RSI < 25", {"field": "rsi_1d_oversold", "op": "is_false"}, "medium"),
 ]
+
+
+# Keys an ``sl_moved`` event may carry for the old and the new stop. ``from``/``to``
+# is the documented form (``/event 12 sl_moved from=225 to=222``).
+_SL_FROM_KEYS = ("from", "from_price", "old", "prev", "before")
+_SL_TO_KEYS = ("to", "to_price", "new", "price", "after")
+
+
+def _num(data: dict, keys: tuple[str, ...]) -> float | None:
+    for k in keys:
+        v = data.get(k)
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, str):
+            try:
+                return float(v)
+            except ValueError:
+                pass
+    return None
+
+
+def sl_widened(direction: str | None, events: list) -> bool | None:
+    """Did an ``sl_moved`` event push the stop AWAY from entry (more risk)?
+
+    Moving the stop *toward* entry — trailing to break-even, locking in — is the
+    opposite of widening and must not be flagged. For a LONG the stop widens when
+    it moves down, for a SHORT when it moves up.
+
+    ``False`` when nothing moved or every move tightened; ``None`` when it cannot
+    be judged (unknown direction, or an ``sl_moved`` event without usable numbers)
+    so the rule is reported as not-applicable rather than as a violation.
+    """
+    d = (direction or "").upper()
+    if d not in ("LONG", "SHORT"):
+        return None
+    moves = []
+    for e in events or []:
+        ev = e if isinstance(e, dict) else e.to_dict()
+        if ev.get("type") == "sl_moved":
+            moves.append(ev)
+    if not moves:
+        return False
+    prev: float | None = None
+    unjudged = False
+    for ev in sorted(moves, key=lambda x: x.get("event_ts") or 0):
+        data = ev.get("data") or {}
+        if not isinstance(data, dict):
+            data = {}
+        old = _num(data, _SL_FROM_KEYS)
+        new = _num(data, _SL_TO_KEYS)
+        if old is None:
+            old = prev                      # chain: "to" of the previous move
+        if old is None or new is None:
+            unjudged = True
+            prev = new if new is not None else prev
+            continue
+        if (d == "LONG" and new < old) or (d == "SHORT" and new > old):
+            return True
+        prev = new
+    return None if unjudged else False
 
 
 def trade_facts(t: Trade | dict) -> dict[str, Any]:
@@ -52,8 +114,9 @@ def trade_facts(t: Trade | dict) -> dict[str, Any]:
         direction=direction,
         tags=sorted({x.lower() for x in tags}),
         planned_rr=analytics.planned_rr(direction, d.get("entry_price"), d.get("sl_price"), d.get("tp_price")),
-        has_event_sl_moved="sl_moved" in event_types,
+        has_event_sl_moved="sl_moved" in event_types,   # kept for user rules; direction-blind
         has_event_tp_moved="tp_moved" in event_types,
+        sl_widened=sl_widened(direction, events),
         entry_hour_utc=datetime.fromtimestamp(opened / 1000, tz=timezone.utc).hour if opened else None,
         has_sl=d.get("sl_price") is not None,
         has_tp=d.get("tp_price") is not None,

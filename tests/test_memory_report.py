@@ -42,7 +42,7 @@ def tools():
 
 
 # ── migration ────────────────────────────────────────────────────────────────
-def test_v1_database_migrates_to_v2(tmp_path):
+def test_v1_database_migrates_to_current(tmp_path):
     path = tmp_path / "old.db"
     conn = sqlite3.connect(path)
     conn.executescript("""
@@ -56,15 +56,15 @@ def test_v1_database_migrates_to_v2(tmp_path):
     """)
     conn.commit(); conn.close()
     db = JournalDB(path)
-    assert db.schema_version == SCHEMA_VERSION == 2
+    assert db.schema_version == SCHEMA_VERSION
     cols = {r["name"] for r in db.conn.execute("PRAGMA table_info(memories)")}
-    assert "key" in cols
+    assert "key" in cols                                             # v2 step ran
     assert memory.list_memories(db)[0]["content"] == "likes 4H"      # data preserved
     versions = [r[0] for r in db.conn.execute("SELECT version FROM schema_version ORDER BY version")]
-    assert versions == [1, 2]
+    assert versions == list(range(1, SCHEMA_VERSION + 1))            # every step recorded, in order
     db.close()
     db2 = JournalDB(path)                                            # idempotent re-open
-    assert db2.schema_version == 2
+    assert db2.schema_version == SCHEMA_VERSION
     db2.close()
 
 

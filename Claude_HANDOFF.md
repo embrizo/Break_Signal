@@ -1,6 +1,6 @@
 # Claude handoff — Break Signal
 
-**Last Updated:** 2026-09-20
+**Last Updated:** 2026-09-22
 **Workspace:** `G:\7Days\Trading_Journal` (moved from `Break_Signal` on 2026-09-20; same git repo + remote)
 **Primary Language/Runtime:** Python 3.11+ (asyncio); Pine Script v6 (Phase 1)
 
@@ -12,7 +12,7 @@ that does real work.
 ## Status: journal + AI coach fully built (J0–J6), awaiting live checks and the Pi deploy (2026-09-20)
 
 Everything in [`JOURNAL_AI_IMPLEMENTATION_PLAN.md`](JOURNAL_AI_IMPLEMENTATION_PLAN.md)
-§5 J0–J6 is implemented (embeddings deliberately deferred), unit-tested (215 tests + 3
+§5 J0–J6 is implemented (embeddings deliberately deferred), unit-tested (235 tests + 3
 key-gated live evals) and pushed.
 The three front-ends (CLI, Claude Code MCP, Telegram bot) share one `Tools` surface;
 `analytics.py` is the only place numbers are computed. What has NOT been exercised
@@ -82,7 +82,7 @@ Full spec: [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) — algorithm (§2
 ## Quick run commands
 
 ```bash
-# All tests — numpy + pytest (+ aiohttp/websockets/mcp/anthropic for the wiring tests); 215 pass, 3 live skipped
+# All tests — numpy + pytest (+ aiohttp/websockets/mcp/anthropic for the wiring tests); 235 pass, 3 live skipped
 python -m pytest tests/ -q
 ANTHROPIC_API_KEY=... python -m pytest tests/evals -q      # 3 live coach evals, cost money
 
@@ -143,6 +143,12 @@ AI_ENABLED=1 ANTHROPIC_API_KEY=... docker compose up -d --build
 6. **(Housekeeping) push `main`** to GitHub when ready — `3590c43` is local-only.
 
 ## Session log
+
+### Session 6 — 2026-09-22
+- **Local test run of the whole service** (`config.yaml` written for local use — gitignored, alerts + AI off, dashboard on `127.0.0.1:8787`). Service starts, dashboard renders every panel from the DB (equity canvas actually painted, no overflow, no JS errors), CLI round-trip `add → event → close → show → stats → export → backup → footer → memories → report` all good, `backup` self-verified `integrity=ok`, keyless `ask` prints the friendly one-liner. `/api/chart` 502s and the watchers loop their backfill retry — OKX is DNS-blocked here, both handled as designed. All journal writes went to a scratch copy of the DB.
+- **Bug found by that run and fixed: "Never widen the stop" was direction-blind.** It keyed on `has_event_sl_moved`, so trailing a stop to break-even counted as widening, and (at 3+ "violations") the coach would have derived a memory asserting the trader keeps widening stops. New fact `rules.sl_widened(direction, events)` walks the `sl_moved` events in order, compares `from`/`to` against the direction (LONG widens down, SHORT widens up), chains a later `to`-only move off the previous one, and returns `None` (rule not applicable) when the numbers or the direction are missing. `has_event_sl_moved` kept for user rules. **Schema v3** (`_migrate_v3`) repoints the stored seed rule and deletes only the violations that are no longer violations, leaving a user-edited condition alone; ran on the real `data/journal.db` (backed up first). 29 new tests (235 pass, 3 live skipped). Two older tests pinned schema facts that a second migration changed (a hardcoded `schema_version` row count, `== 2`) — both now assert against `SCHEMA_VERSION`.
+- Added `tests/test_dashboard_lines.py` (9 tests) for the trendline segments the dashboard draws — see the J6 entry below.
+- User decision: **they will move the coach to the Gemini API themselves.** Don't build Anthropic-side work unasked; the seams are listed in Next steps #0.
 
 ### Session 5 — 2026-09-20
 - User supplied `trading_journal_implementation_plan_AI_extended.md` (journal + AI copilot concept, Next.js/Supabase/LangGraph stack — file not kept in repo) and asked to integrate it with Break Signal plus an "AI suggestion" feature: log trades with win/loss + reason, then ask Claude in chat for price-action suggestions grounded in that history.
